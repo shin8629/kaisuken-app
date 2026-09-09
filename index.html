@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>回数券管理アプリ</title>
+<style>
+:root{--blue:#0b63a5;--blue2:#0b7bdc;--bg:#eef3f8;--line:#d8e1ea;--text:#17202a;--sub:#687482}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;color:var(--text)}
+.wrap{max-width:430px;margin:0 auto;min-height:100vh;background:#fff}
+.header{background:var(--blue);color:#fff;padding:16px 18px;font-size:20px;font-weight:800}
+.content{padding:16px}
+.card{border:1px solid var(--line);border-radius:16px;padding:15px;margin-bottom:14px;background:#fff;box-shadow:0 2px 8px #0000000a}
+h2{margin:0 0 12px;font-size:18px}
+label{display:block;font-size:13px;font-weight:800;margin:12px 0 6px}
+input{width:100%;padding:12px;border:1px solid #c8d2dc;border-radius:10px;font-size:16px}
+button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:15px}
+.primary{width:100%;background:var(--blue2);color:#fff;margin-top:14px}
+.secondary{background:#edf7ff;color:var(--blue2)}
+.small{font-size:12px;color:var(--sub);line-height:1.55}
+.info{background:#edf7ff;border-radius:10px;padding:11px;margin-top:10px}
+.good{background:#eefaf1;border:1px solid #b8dfc0;color:#1c5d36;border-radius:10px;padding:11px;margin-top:10px}
+.error{background:#fdecec;border:1px solid #efb8b8;color:#a61b1b;border-radius:10px;padding:11px;margin-top:10px;display:none}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.homegrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.homebtn{border:1px solid var(--line);background:#fff;text-align:left;padding:15px;border-radius:14px}
+.homebtn strong{display:block;margin-bottom:4px}
+.homebtn span{font-size:11px;color:var(--sub)}
+.hidden{display:none}
+.badge{display:inline-block;background:#edf4fb;border-radius:999px;padding:5px 8px;font-size:11px;font-weight:800;margin:3px 4px 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">回数券管理アプリ</div>
+  <div class="content">
+
+    <section id="setupView" class="card">
+      <h2>初回接続設定</h2>
+      <div class="small">GitHub上でこのファイルの2か所を編集し、SupabaseのProject URLとPublishable keyを入れると接続できます。</div>
+      <div class="info small"><strong>SUPABASE_URL</strong><br><strong>SUPABASE_PUBLISHABLE_KEY</strong></div>
+    </section>
+
+    <section id="loginView" class="card">
+      <h2>スタッフログイン</h2>
+      <div class="small">Supabase Authで作成したメールアドレスとパスワードでログインします。</div>
+      <label>メールアドレス</label>
+      <input id="email" type="email" autocomplete="username" placeholder="staff@example.com">
+      <label>パスワード</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="パスワード">
+      <button id="loginBtn" class="primary">ログイン</button>
+      <div id="loginError" class="error"></div>
+    </section>
+
+    <section id="appView" class="hidden">
+      <div class="card">
+        <div class="row">
+          <div><strong id="staffName">スタッフ</strong><div class="small">ログイン中</div></div>
+          <button id="logoutBtn" class="secondary">ログアウト</button>
+        </div>
+        <div id="storeBadges" style="margin-top:8px"></div>
+      </div>
+
+      <div class="card">
+        <h2>接続テスト成功 🎉</h2>
+        <div class="good">Supabaseへのログインとスタッフ確認が成功しました。</div>
+        <div class="info small">次の段階で、利用登録・回数券一覧・履歴・回数券登録・管理の各画面をつないでいきます。</div>
+      </div>
+
+      <div class="homegrid">
+        <button class="homebtn"><strong>利用登録</strong><span>次工程で接続</span></button>
+        <button class="homebtn"><strong>回数券一覧</strong><span>次工程で接続</span></button>
+        <button class="homebtn"><strong>利用履歴</strong><span>次工程で接続</span></button>
+        <button class="homebtn"><strong>回数券登録</strong><span>次工程で接続</span></button>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_PUBLISHABLE_KEY = "YOUR_SUPABASE_PUBLISHABLE_KEY";
+
+const configured =
+  !SUPABASE_URL.includes("YOUR_SUPABASE") &&
+  !SUPABASE_PUBLISHABLE_KEY.includes("YOUR_SUPABASE");
+
+const client = configured
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+  : null;
+
+const setupView = document.getElementById("setupView");
+const loginView = document.getElementById("loginView");
+const appView = document.getElementById("appView");
+const loginError = document.getElementById("loginError");
+
+if (configured) setupView.classList.add("hidden");
+
+function showError(message){
+  loginError.textContent = message;
+  loginError.style.display = "block";
+}
+function clearError(){
+  loginError.textContent = "";
+  loginError.style.display = "none";
+}
+
+async function loadStaff(user){
+  const { data: staff, error: staffError } = await client
+    .from("staff")
+    .select("id,name")
+    .eq("auth_user_id", user.id)
+    .maybeSingle();
+
+  if (staffError) throw staffError;
+  if (!staff) throw new Error("このログインユーザーはスタッフ登録されていません。");
+
+  const { data: storeLinks, error: storeError } = await client
+    .from("staff_stores")
+    .select("stores(name)")
+    .eq("staff_id", staff.id);
+
+  if (storeError) throw storeError;
+
+  document.getElementById("staffName").textContent = staff.name;
+  const badges = document.getElementById("storeBadges");
+  badges.innerHTML = "";
+  (storeLinks || []).forEach(link => {
+    const span = document.createElement("span");
+    span.className = "badge";
+    span.textContent = link.stores?.name || "店舗";
+    badges.appendChild(span);
+  });
+
+  loginView.classList.add("hidden");
+  appView.classList.remove("hidden");
+}
+
+async function restoreSession(){
+  if (!configured) return;
+  const { data } = await client.auth.getSession();
+  const user = data?.session?.user;
+  if (!user) return;
+  try {
+    await loadStaff(user);
+  } catch (e) {
+    await client.auth.signOut();
+    showError(e.message);
+  }
+}
+
+document.getElementById("loginBtn").addEventListener("click", async () => {
+  clearError();
+  if (!configured) {
+    showError("先にSupabaseのProject URLとPublishable keyを設定してください。");
+    return;
+  }
+
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  if (!email || !password) {
+    showError("メールアドレスとパスワードを入力してください。");
+    return;
+  }
+
+  const btn = document.getElementById("loginBtn");
+  btn.disabled = true;
+  btn.textContent = "ログイン中…";
+
+  try {
+    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    await loadStaff(data.user);
+  } catch (e) {
+    showError(e.message || "ログインに失敗しました。");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "ログイン";
+  }
+});
+
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+  if (client) await client.auth.signOut();
+  appView.classList.add("hidden");
+  loginView.classList.remove("hidden");
+  document.getElementById("password").value = "";
+});
+
+restoreSession();
+</script>
+</body>
+</html>
