@@ -121,6 +121,14 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
     <div id="usageTicketPreview" class="info" style="margin-top:16px;">
   会員・内容・時間を選ぶと、使用する回数券を自動表示します。
 </div>
+    <button
+  id="usageRegisterBtn"
+  class="primary"
+  style="margin-top:16px;"
+  type="button"
+>
+  利用を登録
+</button>
   </div>
 </section>
   </div>
@@ -154,7 +162,7 @@ function clearError(){
   loginError.textContent = "";
   loginError.style.display = "none";
 }
-
+let currentStaffId = null;
 async function loadStaff(user){
   const { data: staff, error: staffError } = await client
     .from("staff")
@@ -164,7 +172,7 @@ async function loadStaff(user){
 
   if (staffError) throw staffError;
   if (!staff) throw new Error("このログインユーザーはスタッフ登録されていません。");
-
+  currentStaffId = staff.id;
   const { data: storeLinks, error: storeError } = await client
     .from("staff_stores")
     .select("stores(name)")
@@ -456,7 +464,61 @@ usageStore.addEventListener("change", () => {
 usageSessionType.addEventListener("change", () => {
   loadUsageTicketPreview();
 });
+document.getElementById("usageRegisterBtn").addEventListener("click", async () => {
+  const button = document.getElementById("usageRegisterBtn");
 
+  if (!selectedUsageMemberId) {
+    alert("会員を選択してください。");
+    return;
+  }
+
+  if (!usageStore.value) {
+    alert("店舗を選択してください。");
+    return;
+  }
+
+  if (!currentStaffId) {
+    alert("スタッフ情報を取得できません。");
+    return;
+  }
+
+  const sessionTypeMap = {
+    "通常パーソナル": "normal",
+    "VRC": "vrc",
+    "リフォーマー": "reformer"
+  };
+
+  const sessionType = sessionTypeMap[usageSessionType.value];
+  const durationMinutes = Number(usageDuration.value);
+
+  if (!sessionType) {
+    alert("内容を選択してください。");
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "登録中...";
+
+  const { data, error } = await client.rpc("register_usage", {
+    p_member_id: selectedUsageMemberId,
+    p_store_id: usageStore.value,
+    p_staff_id: currentStaffId,
+    p_session_type: sessionType,
+    p_duration_minutes: durationMinutes
+  });
+
+  button.disabled = false;
+  button.textContent = "利用を登録";
+
+  if (error) {
+    console.error("利用登録エラー:", error);
+    alert("登録できませんでした。\n" + error.message);
+    return;
+  }
+
+  alert("利用を登録しました！");
+  await loadUsageTicketPreview();
+});
 loadStores(); 
 restoreSession();
 </script>
