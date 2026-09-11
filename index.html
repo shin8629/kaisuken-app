@@ -118,6 +118,9 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
         <option value="120">120分</option>
       </select>
     </div>
+    <div id="usageTicketPreview" class="info" style="margin-top:16px;">
+  会員・内容・時間を選ぶと、使用する回数券を自動表示します。
+</div>
   </div>
 </section>
   </div>
@@ -372,6 +375,7 @@ function renderUsageMemberCandidates() {
     button.addEventListener("click", () => {
       usageMemberSearch.value = display;
       selectedUsageMemberId = member.id;
+      loadUsageTicketPreview();
       usageMemberCandidates.innerHTML = "";
     });
 
@@ -386,6 +390,73 @@ usageMemberSearch.addEventListener("input", () => {
 usageStore.addEventListener("change", () => {
   loadMembersForStore(usageStore.value);
 });
+  async function loadUsageTicketPreview() {
+  const preview = document.getElementById("usageTicketPreview");
+
+  if (!selectedUsageMemberId) {
+    preview.textContent =
+      "会員・内容・時間を選ぶと、使用する回数券を自動表示します。";
+    return;
+  }
+
+  const uses = Number(usageDuration.value) / 30;
+
+  const { data: allocations, error } = await client
+    .from("ticket_allocations")
+    .select(`
+      id,
+      management_number,
+      remaining_uses,
+      tickets!inner (
+        id,
+        ticket_category,
+        ticket_name,
+        expires_at
+      )
+    `)
+    .eq("member_id", selectedUsageMemberId)
+    .eq("tickets.ticket_category", "regular")
+    .gt("remaining_uses", 0)
+    .order("expires_at", {
+      ascending: true,
+      referencedTable: "tickets"
+    });
+
+  if (error) {
+    console.error("回数券取得エラー:", error);
+    preview.textContent = "回数券の取得に失敗しました。";
+    return;
+  }
+
+  const usable = (allocations || []).find(
+    allocation => allocation.remaining_uses >= uses
+  );
+
+  if (!usable) {
+    preview.textContent = "使用できる通常回数券がありません。";
+    return;
+  }
+
+  const before = usable.remaining_uses;
+  const after = before - uses;
+
+  preview.innerHTML = `
+    <strong>使用予定の回数券</strong><br>
+    ${usable.tickets.ticket_name}<br>
+    管理番号：${usable.management_number || "未登録"}<br>
+    使用回数：${uses}回<br>
+    残り：${before}回 → ${after}回<br>
+    有効期限：${usable.tickets.expires_at}
+  `;
+}
+  usageDuration.addEventListener("change", () => {
+  loadUsageTicketPreview();
+});
+
+usageSessionType.addEventListener("change", () => {
+  loadUsageTicketPreview();
+});
+
 loadStores(); 
 restoreSession();
 </script>
