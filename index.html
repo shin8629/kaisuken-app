@@ -97,6 +97,7 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
         type="text"
         placeholder="会員番号または名前で検索"
       >
+      <div id="usageMemberCandidates" style="margin-top:8px;"></div>
     </div>
 
     <div style="margin-top:16px;">
@@ -312,7 +313,7 @@ async function loadMembersForStore(storeId) {
     console.error("会員取得エラー:", memberError);
     return;
   }
-
+  currentUsageMembers = members;
   members.forEach(member => {
     const display =
       `${member.current_member_number} ${member.last_name} ${member.first_name}`;
@@ -324,7 +325,64 @@ async function loadMembersForStore(storeId) {
     usageMemberList.appendChild(option);
   });
 }
+const usageMemberCandidates =
+  document.getElementById("usageMemberCandidates");
 
+let currentUsageMembers = [];
+let selectedUsageMemberId = null;
+
+function renderUsageMemberCandidates() {
+  const keyword = usageMemberSearch.value.trim().toLowerCase();
+
+  usageMemberCandidates.innerHTML = "";
+
+  if (!keyword) return;
+
+  const filtered = currentUsageMembers.filter(member => {
+    const memberNumber =
+      (member.current_member_number || "").toLowerCase();
+
+    const fullName =
+      `${member.last_name || ""}${member.first_name || ""}`.toLowerCase();
+
+    const spacedName =
+      `${member.last_name || ""} ${member.first_name || ""}`.toLowerCase();
+
+    return (
+      memberNumber.includes(keyword) ||
+      fullName.includes(keyword) ||
+      spacedName.includes(keyword)
+    );
+  });
+
+  filtered.forEach(member => {
+    const display =
+      `${member.current_member_number} ${member.last_name} ${member.first_name}`;
+
+    const button = document.createElement("button");
+
+    button.type = "button";
+    button.className = "secondary";
+    button.style.width = "100%";
+    button.style.marginTop = "6px";
+    button.style.textAlign = "left";
+
+    button.textContent = display;
+
+    button.addEventListener("click", () => {
+      usageMemberSearch.value = display;
+      selectedUsageMemberId = member.id;
+      usageMemberCandidates.innerHTML = "";
+    });
+
+    usageMemberCandidates.appendChild(button);
+  });
+}
+
+usageMemberSearch.addEventListener("input", () => {
+  selectedUsageMemberId = null;
+  renderUsageMemberCandidates();
+});
 usageStore.addEventListener("change", () => {
   loadMembersForStore(usageStore.value);
 });
