@@ -70,7 +70,7 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
 
       <div class="homegrid">
         <button id="usageBtn" class="homebtn"><strong>利用登録</strong><span>利用登録を開く</span></button> 
-        <button class="homebtn"><strong>回数券一覧</strong><span>次工程で接続</span></button>
+        <button id="ticketListBtn" class="homebtn"><strong>回数券一覧</strong><span>次工程で接続</span></button>
         <button class="homebtn"><strong>利用履歴</strong><span>次工程で接続</span></button>
         <button class="homebtn"><strong>回数券登録</strong><span>次工程で接続</span></button>
       </div>
@@ -129,6 +129,38 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
 >
   利用を登録
 </button>
+  </div>
+</section>
+    <section id="ticketListView" class="hidden">
+  <div class="card">
+    <h2>回数券一覧</h2>
+
+    <button id="ticketListBackBtn" class="secondary">
+      ← ホームに戻る
+    </button>
+
+    <div style="margin-top:16px;">
+      <label>店舗</label>
+      <select id="ticketListStore">
+        <option value="">すべての店舗</option>
+      </select>
+    </div>
+
+    <div style="margin-top:16px;">
+      <label>検索</label>
+      <input
+        id="ticketListSearch"
+        type="text"
+        placeholder="会員番号・名前・管理番号で検索"
+      >
+    </div>
+
+    <div
+      id="ticketListContainer"
+      style="margin-top:16px;"
+    >
+      回数券を読み込みます。
+    </div>
   </div>
 </section>
   </div>
@@ -257,7 +289,19 @@ usageBackBtn.addEventListener("click", () => {
   usageView.classList.add("hidden");
   homeView.classList.remove("hidden");
 });
+const ticketListBtn = document.getElementById("ticketListBtn");
+const ticketListView = document.getElementById("ticketListView");
+const ticketListBackBtn = document.getElementById("ticketListBackBtn");
 
+ticketListBtn.addEventListener("click", () => {
+  homeView.classList.add("hidden");
+  ticketListView.classList.remove("hidden");
+});
+
+ticketListBackBtn.addEventListener("click", () => {
+  ticketListView.classList.add("hidden");
+  homeView.classList.remove("hidden");
+});
  const usageStore = document.getElementById("usageStore");
 
 async function loadStores() {
