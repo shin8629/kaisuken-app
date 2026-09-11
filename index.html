@@ -268,7 +268,66 @@ async function loadStores() {
     usageStore.appendChild(option);
   });
 }
+const usageMemberSearch = document.getElementById("usageMemberSearch");
+let usageMemberMap = new Map();
 
+let usageMemberList = document.getElementById("usageMemberList");
+
+if (!usageMemberList) {
+  usageMemberList = document.createElement("datalist");
+  usageMemberList.id = "usageMemberList";
+  document.body.appendChild(usageMemberList);
+}
+
+usageMemberSearch.setAttribute("list", "usageMemberList");
+
+async function loadMembersForStore(storeId) {
+  usageMemberSearch.value = "";
+  usageMemberList.innerHTML = "";
+  usageMemberMap.clear();
+
+  if (!storeId) return;
+
+  const { data: links, error: linkError } = await client
+    .from("member_stores")
+    .select("member_id")
+    .eq("store_id", storeId);
+
+  if (linkError) {
+    console.error("会員店舗取得エラー:", linkError);
+    return;
+  }
+
+  const memberIds = links.map(row => row.member_id);
+
+  if (memberIds.length === 0) return;
+
+  const { data: members, error: memberError } = await client
+    .from("members")
+    .select("id, current_member_number, last_name, first_name")
+    .in("id", memberIds)
+    .order("current_member_number");
+
+  if (memberError) {
+    console.error("会員取得エラー:", memberError);
+    return;
+  }
+
+  members.forEach(member => {
+    const display =
+      `${member.current_member_number} ${member.last_name} ${member.first_name}`;
+
+    usageMemberMap.set(display, member.id);
+
+    const option = document.createElement("option");
+    option.value = display;
+    usageMemberList.appendChild(option);
+  });
+}
+
+usageStore.addEventListener("change", () => {
+  loadMembersForStore(usageStore.value);
+});
 loadStores(); 
 restoreSession();
 </script>
