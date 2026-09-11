@@ -75,6 +75,50 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
         <button class="homebtn"><strong>回数券登録</strong><span>次工程で接続</span></button>
       </div>
     </section>
+    <section id="usageView" class="hidden">
+  <div class="card">
+    <h2>利用登録</h2>
+
+    <button id="usageBackBtn" class="secondary">
+      ← ホームに戻る
+    </button>
+
+    <div style="margin-top:16px;">
+      <label>店舗</label>
+      <select id="usageStore">
+        <option value="">店舗を選択</option>
+      </select>
+    </div>
+
+    <div style="margin-top:16px;">
+      <label>会員</label>
+      <input
+        id="usageMemberSearch"
+        type="text"
+        placeholder="会員番号または名前で検索"
+      >
+    </div>
+
+    <div style="margin-top:16px;">
+      <label>内容</label>
+      <select id="usageSessionType">
+        <option value="通常パーソナル">通常パーソナル</option>
+        <option value="VRC">VRC</option>
+        <option value="リフォーマー">リフォーマー</option>
+      </select>
+    </div>
+
+    <div style="margin-top:16px;">
+      <label>時間</label>
+      <select id="usageDuration">
+        <option value="30">30分</option>
+        <option value="60">60分</option>
+        <option value="90">90分</option>
+        <option value="120">120分</option>
+      </select>
+    </div>
+  </div>
+</section>
   </div>
 </div>
 
@@ -187,7 +231,21 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
   loginView.classList.remove("hidden");
   document.getElementById("password").value = "";
 });
+const usageBtn = document.getElementById("usageBtn");
+const usageView = document.getElementById("usageView");
+const usageBackBtn = document.getElementById("usageBackBtn");
+const homeView = usageBtn.closest("section");
 
+usageBtn.addEventListener("click", () => {
+  homeView.classList.add("hidden");
+  usageView.classList.remove("hidden");
+});
+
+usageBackBtn.addEventListener("click", () => {
+  usageView.classList.add("hidden");
+  homeView.classList.remove("hidden");
+});
+  
 restoreSession();
 </script>
 </body>
