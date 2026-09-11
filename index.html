@@ -245,7 +245,31 @@ usageBackBtn.addEventListener("click", () => {
   usageView.classList.add("hidden");
   homeView.classList.remove("hidden");
 });
-  
+
+ const usageStore = document.getElementById("usageStore");
+
+async function loadStores() {
+  const { data, error } = await client
+    .from("stores")
+    .select("id, name")
+    .order("name");
+
+  if (error) {
+    console.error("店舗取得エラー:", error);
+    return;
+  }
+
+  usageStore.innerHTML = '<option value="">店舗を選択</option>';
+
+  data.forEach(store => {
+    const option = document.createElement("option");
+    option.value = store.id;
+    option.textContent = store.name;
+    usageStore.appendChild(option);
+  });
+}
+
+loadStores(); 
 restoreSession();
 </script>
 </body>
