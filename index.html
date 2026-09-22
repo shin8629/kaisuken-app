@@ -254,6 +254,8 @@ async function loadStaff(user){
     badges.appendChild(span);
   });
 
+  await loadStores();
+
   loginView.classList.add("hidden");
   appView.classList.remove("hidden");
 }
@@ -344,7 +346,7 @@ async function loadStores() {
 
   if (error) {
     console.error("店舗取得エラー:", error);
-    return;
+    throw new Error("店舗情報を取得できませんでした。通信状態を確認して、もう一度ログインしてください。");
   }
 
   usageStore.innerHTML = '<option value="">店舗を選択</option>';
@@ -1014,7 +1016,6 @@ ticketListSearch.addEventListener("input", () => {
   });
 })();
 
-loadStores(); 
 restoreSession();
 </script>
 </body>
