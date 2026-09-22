@@ -71,7 +71,7 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
       <div class="homegrid">
         <button id="usageBtn" class="homebtn"><strong>利用登録</strong><span>利用登録を開く</span></button> 
         <button id="ticketListBtn" class="homebtn"><strong>回数券一覧</strong><span>次工程で接続</span></button>
-        <button class="homebtn"><strong>利用履歴</strong><span>次工程で接続</span></button>
+        <button id="historyBtn" class="homebtn"><strong>利用履歴</strong><span>利用履歴を開く</span></button>
         <button class="homebtn"><strong>回数券登録</strong><span>次工程で接続</span></button>
       </div>
     </section>
@@ -160,6 +160,38 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
       style="margin-top:16px;"
     >
       回数券を読み込みます。
+    </div>
+  </div>
+</section>
+<section id="historyView" class="hidden">
+  <div class="card">
+    <h2>利用履歴</h2>
+
+    <button id="historyBackBtn" class="secondary">
+      ← ホームに戻る
+    </button>
+
+    <div style="margin-top:16px;">
+      <label>店舗</label>
+      <select id="historyStore">
+        <option value="">すべての店舗</option>
+      </select>
+    </div>
+
+    <div style="margin-top:16px;">
+      <label>検索</label>
+      <input
+        id="historySearch"
+        type="text"
+        placeholder="会員番号・名前・管理番号で検索"
+      >
+    </div>
+
+    <div
+      id="historyContainer"
+      style="margin-top:16px;"
+    >
+      利用履歴を読み込みます。
     </div>
   </div>
 </section>
