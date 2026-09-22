@@ -829,6 +829,191 @@ ticketListStore.addEventListener("change", () => {
 ticketListSearch.addEventListener("input", () => {
   renderTicketList();
 });
+// ===== 利用履歴（読み取り専用） =====
+(() => {
+  const historyBtn = document.getElementById("historyBtn");
+  const historyView = document.getElementById("historyView");
+  const historyStore = document.getElementById("historyStore");
+  const historySearch = document.getElementById("historySearch");
+  const container = document.getElementById("historyContainer");
+  const status = document.createElement("p");
+  status.className = "small";
+  status.setAttribute("role", "status");
+  const refresh = document.createElement("button");
+  refresh.type = "button";
+  refresh.className = "secondary";
+  refresh.textContent = "履歴を更新";
+  container.before(refresh, status);
+  let request = 0;
+  let records = [];
+  let loaded = false;
+  const normalize = value => String(value ?? "").normalize("NFKC").toLowerCase().replace(/\s/g, "");
+  const sessionNames = { normal: "通常パーソナル", vrc: "VRC", reformer: "リフォーマー" };
+  const dates = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false
+  });
+  function reset() {
+    request++;
+    records = [];
+    loaded = false;
+    container.replaceChildren();
+    container.setAttribute("aria-busy", "false");
+    status.textContent = "";
+    refresh.disabled = false;
+  }
+  // Follow the actual number returned, including servers with a lower row limit.
+  async function readPages(makeQuery, version) {
+    const rows = [];
+    for (let offset = 0; ; ) {
+      if (version !== request) return [];
+      const { data, error } = await makeQuery().range(offset, offset + 499);
+      if (error) throw error;
+      if (!data?.length) return rows;
+      rows.push(...data);
+      offset += data.length;
+    }
+  }
+  async function lookup(table, columns, ids, version) {
+    const unique = [...new Set(ids.filter(id => id != null))];
+    const rows = [];
+    for (let i = 0; i < unique.length; i += 100) {
+      rows.push(...await readPages(() => client.from(table).select(columns)
+        .in("id", unique.slice(i, i + 100)).order("id"), version));
+      if (version !== request) return new Map();
+    }
+    return new Map(rows.map(row => [row.id, row]));
+  }
+  function render() {
+    if (!loaded) return;
+    container.replaceChildren();
+    const keyword = normalize(historySearch.value);
+    const matches = records.filter(record =>
+      (!historyStore.value || String(record.row.store_id) === historyStore.value) &&
+      (!keyword || record.search.includes(keyword)));
+    status.textContent = `${matches.length}件 / 読み込んだ履歴 ${records.length}件（日時は日本時間）`;
+    if (!matches.length) {
+      container.textContent = "該当する利用履歴はありません。";
+      return;
+    }
+    // Render in batches without restricting the search to the visible cards.
+    let shown = 0;
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "secondary";
+    more.textContent = "次の50件を表示";
+    function appendCards() {
+      more.remove();
+      const end = Math.min(shown + 50, matches.length);
+      for (; shown < end; shown++) {
+        const record = matches[shown];
+        const row = record.row;
+        const card = document.createElement("article");
+        card.className = "card";
+        const heading = document.createElement("strong");
+        heading.textContent = record.member;
+        const details = document.createElement("div");
+        details.style.whiteSpace = "pre-line";
+        details.style.lineHeight = "1.7";
+        const date = row.used_at ? new Date(row.used_at) : null;
+        details.textContent = [
+          `利用日時：${date && Number.isFinite(date.getTime()) ? dates.format(date) : "日時不明"}`,
+          `店舗：${record.store}`,
+          `担当者：${record.staff}`,
+          `内容：${sessionNames[row.session_type] || row.session_type || "不明"}`,
+          `時間：${row.duration_minutes ?? "不明"}分 / 使用回数：${row.uses ?? "不明"}回`,
+          `通常券 管理番号：${record.regular}`,
+          ...(row.option_allocation_id ? [`オプション券 管理番号：${record.option}`] : [])
+        ].join("\n");
+        card.append(heading, details);
+        container.appendChild(card);
+      }
+      if (shown < matches.length) container.appendChild(more);
+    }
+    more.addEventListener("click", appendCards);
+    appendCards();
+  }
+  async function loadHistory() {
+    reset();
+    const version = request;
+    refresh.disabled = true;
+    container.setAttribute("aria-busy", "true");
+    status.textContent = "利用履歴を読み込み中です…";
+    try {
+      if (!client || !currentStaffId) throw new Error("ログインしてから利用履歴を開いてください。");
+      const [rows, stores] = await Promise.all([
+        readPages(() => client.from("usage_history")
+          .select("id,member_id,store_id,staff_id,session_type,duration_minutes,uses,regular_allocation_id,option_allocation_id,used_at")
+          .order("used_at", { ascending: false }).order("id", { ascending: false }), version),
+        readPages(() => client.from("stores").select("id,name").order("id"), version)
+      ]);
+      if (version !== request) return;
+      const [members, staff, allocations] = await Promise.all([
+        lookup("members", "id,current_member_number,last_name,first_name", rows.map(row => row.member_id), version),
+        lookup("staff", "id,name", rows.map(row => row.staff_id), version),
+        lookup("ticket_allocations", "id,management_number", rows.flatMap(row => [row.regular_allocation_id, row.option_allocation_id]), version)
+      ]);
+      if (version !== request) return;
+      const storeNames = new Map(stores.map(store => [store.id, store.name]));
+      const allocationName = id => id == null ? "なし" :
+        allocations.has(id) ? String(allocations.get(id).management_number ?? "未登録") : "回数券情報なし";
+      records = rows.map(row => {
+        const member = members.get(row.member_id);
+        const name = member ? `${member.current_member_number ?? ""} ${member.last_name || ""} ${member.first_name || ""}`.trim() : "会員情報なし";
+        const regular = allocationName(row.regular_allocation_id);
+        const option = allocationName(row.option_allocation_id);
+        return { row, member: name, regular, option,
+          store: storeNames.get(row.store_id) || "店舗情報なし",
+          staff: staff.get(row.staff_id)?.name || "担当者情報なし",
+          search: normalize(`${name} ${regular} ${option}`) };
+      });
+      const selected = historyStore.value;
+      historyStore.replaceChildren(new Option("すべての店舗", ""));
+      stores.sort((a, b) => a.name.localeCompare(b.name, "ja"));
+      for (const store of stores) historyStore.appendChild(new Option(store.name, store.id));
+      // Keep filters even if a related store was deleted or is no longer visible.
+      const unknown = new Set(rows.map(row => row.store_id).filter(id => id != null && !storeNames.has(id)));
+      for (const id of unknown) historyStore.appendChild(new Option("店舗情報なし", id));
+      historyStore.value = selected;
+      if (historyStore.selectedIndex < 0) historyStore.value = "";
+      loaded = true;
+      render();
+    } catch (error) {
+      if (version !== request) return;
+      status.textContent = "利用履歴を取得できませんでした。ログイン状態・通信状態を確認し、「履歴を更新」で再試行してください。";
+      console.error("利用履歴取得エラー:", error);
+    } finally {
+      if (version === request) {
+        refresh.disabled = false;
+        container.setAttribute("aria-busy", "false");
+      }
+    }
+  }
+  historyBtn.addEventListener("click", () => {
+    homeView.classList.add("hidden");
+    historyView.classList.remove("hidden");
+    loadHistory();
+  });
+  document.getElementById("historyBackBtn").addEventListener("click", () => {
+    reset();
+    historyView.classList.add("hidden");
+    homeView.classList.remove("hidden");
+  });
+  historyStore.addEventListener("change", render);
+  historySearch.addEventListener("input", render);
+  refresh.addEventListener("click", loadHistory);
+  function clearSession() {
+    reset();
+    historyView.classList.add("hidden");
+    historySearch.value = "";
+    historyStore.replaceChildren(new Option("すべての店舗", ""));
+  }
+  document.getElementById("logoutBtn").addEventListener("click", clearSession);
+  if (client) client.auth.onAuthStateChange(event => {
+    if (event === "SIGNED_OUT") clearSession();
+  });
+})();
+
 loadStores(); 
 restoreSession();
 </script>
