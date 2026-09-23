@@ -72,6 +72,7 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
         <button id="usageBtn" class="homebtn"><strong>利用登録</strong><span>利用登録を開く</span></button> 
         <button id="ticketListBtn" class="homebtn"><strong>回数券一覧</strong><span>次工程で接続</span></button>
         <button id="historyBtn" class="homebtn"><strong>利用履歴</strong><span>利用履歴を開く</span></button>
+        <button id="memberRegisterBtn" class="homebtn"><strong>会員登録</strong><span>新しい会員を登録する</span></button>
         <button id="ticketRegisterBtn" class="homebtn"><strong>回数券登録</strong><span>回数券を登録する</span></button>
       </div>
     </section>
@@ -1224,7 +1225,71 @@ ticketListSearch.addEventListener("input", () => {
   if(client)client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){version++;pending=null;draft=null;members=[];selected=null;view.classList.add('hidden');}});
 })();
 
+// ===== 会員登録（会員番号は全店舗共通） =====
+(() => {
+ const get=id=>document.getElementById(id);
+ const view=document.createElement('section'); view.id='memberRegisterView';view.className='hidden';
+ view.innerHTML=`<div class="card"><h2>会員登録</h2>
+ <button id="mrBack" class="secondary" type="button">← ホームに戻る</button>
+ <p class="small">会員番号は全店舗共通です。登録済みの会員は新規登録しないでください。</p>
+ <form id="mrForm"><fieldset id="mrFields" style="border:0;padding:0;margin:0;min-width:0">
+ <label for="mrStore">所属店舗</label><select id="mrStore" required style="width:100%;padding:12px;font-size:16px"><option value="">店舗を選択</option></select>
+ <label for="mrNumber">会員番号</label><input id="mrNumber" required maxlength="100" autocomplete="off" placeholder="例：0856（先頭の0も入力）">
+ <label for="mrLast">姓</label><input id="mrLast" required maxlength="100" autocomplete="off" placeholder="例：山田">
+ <label for="mrFirst">名</label><input id="mrFirst" required maxlength="100" autocomplete="off" placeholder="例：太郎">
+ <button class="primary" type="submit">登録内容を確認</button></fieldset></form>
+ <div id="mrConfirm" class="hidden"><h2 style="margin-top:16px">この内容で登録します</h2>
+ <div id="mrSummary" class="info" style="white-space:pre-line;line-height:1.8"></div>
+ <button id="mrEdit" class="secondary" type="button" style="margin-top:12px">入力に戻る</button>
+ <button id="mrSave" class="primary" type="button">この内容で登録</button></div>
+ <p id="mrStatus" role="status" aria-live="polite" style="white-space:pre-line"></p>
+ <button id="mrRetry" class="secondary hidden" type="button">店舗を再読み込み</button>
+ <div id="mrDone" class="hidden"><button id="mrTicket" class="primary" type="button">回数券登録へ進む</button>
+ <button id="mrNext" class="secondary" type="button" style="margin-top:12px">続けて会員登録</button></div></div>`;
+ homeView.parentNode.appendChild(view);
+ const form=get('mrForm'),fields=get('mrFields'),store=get('mrStore'),status=get('mrStatus'),confirm=get('mrConfirm'),save=get('mrSave');
+ let version=0,busy=false,pending=null,draft=null,allowed=new Set();
+ const key=()=>`kaisuken-member-pending-v1:${currentStaffId}`;
+ const hide=(el,yes)=>el.classList[yes?'add':'remove']('hidden');
+ function showPending(){hide(form,true);hide(confirm,false);get('mrSummary').textContent=pending.summary;get('mrEdit').disabled=true;save.textContent='保存結果を確認・再試行';status.textContent='前回の送信結果を確認します。同じ会員を重複して作成することはありません。';}
+ async function pages(make,token){const rows=[];for(let offset=0;;){if(token!==version)return [];const r=await make().range(offset,offset+499);if(r.error)throw r.error;if(!r.data?.length)return rows;rows.push(...r.data);offset+=r.data.length;}}
+ async function load(){const token=++version;fields.disabled=true;allowed.clear();hide(get('mrRetry'),true);status.textContent='店舗を読み込み中です…';try{
+  const [links,stores]=await Promise.all([pages(()=>client.from('staff_stores').select('store_id').eq('staff_id',currentStaffId).order('store_id'),token),pages(()=>client.from('stores').select('id,name').order('id'),token)]);
+  if(token!==version)return;
+  const ids=new Set(links.map(x=>x.store_id));const list=stores.filter(x=>ids.has(x.id)).sort((a,b)=>a.name.localeCompare(b.name,'ja'));
+  store.replaceChildren(new Option('店舗を選択',''));for(const s of list){allowed.add(s.id);store.add(new Option(s.name,s.id));}
+  fields.disabled=!list.length;status.textContent=list.length?'所属店舗を選び、会員情報を入力してください。':'登録できる店舗がありません。管理者に確認してください。';
+ }catch(e){if(token!==version)return;status.textContent='店舗を取得できませんでした。再読み込みしてください。';hide(get('mrRetry'),false);}}
+ async function open(){if(!client||!currentStaffId||busy)return;version++;hide(homeView,true);hide(view,false);form.reset();hide(form,false);hide(confirm,true);hide(get('mrDone'),true);hide(get('mrRetry'),true);fields.disabled=true;save.disabled=false;save.textContent='この内容で登録';get('mrBack').disabled=false;get('mrEdit').disabled=false;draft=null;pending=null;
+  try{pending=JSON.parse(sessionStorage.getItem(key())||'null');}catch(e){status.textContent='ブラウザーの保存領域を利用できません。再読み込みしてお試しください。';return;}
+  if(pending){showPending();return;}await load();
+ }
+ form.addEventListener('submit',async event=>{event.preventDefault();if(busy||pending)return;
+  const number=get('mrNumber').value.trim(),last=get('mrLast').value.trim(),first=get('mrFirst').value.trim();
+  if(!allowed.has(store.value)||[number,last,first].some(v=>!v||v.length>100)){status.textContent='所属店舗を選び、会員番号・姓・名をそれぞれ1〜100文字で入力してください。';return;}
+  const token=version;busy=true;fields.disabled=true;get('mrBack').disabled=true;status.textContent='会員番号を確認中です…';
+  try{const r=await client.from('members').select('id').eq('current_member_number',number).limit(1);if(r.error)throw r.error;if(token!==version)return;if(r.data?.length){status.textContent='この会員番号は登録済みです。新規登録せず、登録済みの会員を確認してください。';return;}
+   const summary=`所属店舗：${store.options[store.selectedIndex].text}\n会員番号：${number}\n氏名：${last} ${first}`;
+   draft={args:{p_request_id:crypto.randomUUID(),p_store_id:store.value,p_member_number:number,p_last_name:last,p_first_name:first},summary};get('mrSummary').textContent=summary;hide(form,true);hide(confirm,false);status.textContent='店舗・会員番号・氏名をご確認ください。';
+  }catch(e){if(token===version)status.textContent='会員番号を確認できませんでした。通信状態を確認して再試行してください。';}
+  finally{busy=false;if(token===version){fields.disabled=false;get('mrBack').disabled=false;}}
+ });
+ get('mrEdit').addEventListener('click',()=>{if(busy||pending)return;draft=null;hide(confirm,true);hide(form,false);status.textContent='';});
+ save.addEventListener('click',async()=>{if(busy||(!draft&&!pending))return;const token=version,storageKey=key();try{if(!pending){sessionStorage.setItem(storageKey,JSON.stringify(draft));pending=draft;}}catch(e){status.textContent='二重登録を防ぐための情報を保存できませんでした。登録は行っていません。';return;}
+  busy=true;save.disabled=true;get('mrEdit').disabled=true;get('mrBack').disabled=true;status.textContent='登録中です…';
+  try{const r=await client.rpc('register_member',pending.args);if(r.error)throw r.error;if(!r.data?.success)throw new Error('保存結果不明');sessionStorage.removeItem(storageKey);if(token!==version)return;pending=null;draft=null;hide(confirm,true);hide(get('mrDone'),false);status.textContent='会員を登録しました。回数券登録で所属店舗を選ぶと、この会員を検索できます。';}
+  catch(e){if(token!==version)return;if(/^(P0001|22|23|42501)/.test(String(e.code||''))){sessionStorage.removeItem(storageKey);pending=null;draft=null;hide(confirm,true);hide(form,false);get('mrEdit').disabled=false;status.textContent=e.code==='23505'?'この会員番号は登録済みです。登録済みの会員を確認してください。':`登録できませんでした。${e.message||'入力内容を確認してください。'}`;}else{showPending();status.textContent='通信が途切れた可能性があります。「保存結果を確認・再試行」を押してください。';}}
+  finally{busy=false;if(token===version){save.disabled=false;get('mrBack').disabled=false;}}
+ });
+ get('mrBack').addEventListener('click',()=>{if(busy)return;version++;hide(view,true);hide(homeView,false);});
+ get('mrNext').addEventListener('click',open);get('mrRetry').addEventListener('click',load);
+ get('mrTicket').addEventListener('click',()=>{version++;hide(view,true);get('ticketRegisterBtn').click();});
+ get('memberRegisterBtn').addEventListener('click',open);
+ if(client)client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){version++;hide(view,true);pending=null;draft=null;allowed.clear();form.reset();get('mrSummary').textContent='';}});
+})();
+
 restoreSession();
 </script>
 </body>
 </html>
+
