@@ -72,7 +72,7 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
         <button id="usageBtn" class="homebtn"><strong>利用登録</strong><span>利用登録を開く</span></button> 
         <button id="ticketListBtn" class="homebtn"><strong>回数券一覧</strong><span>次工程で接続</span></button>
         <button id="historyBtn" class="homebtn"><strong>利用履歴</strong><span>利用履歴を開く</span></button>
-        <button class="homebtn"><strong>回数券登録</strong><span>次工程で接続</span></button>
+        <button id="ticketRegisterBtn" class="homebtn"><strong>回数券登録</strong><span>回数券を登録する</span></button>
       </div>
     </section>
     <section id="usageView" class="hidden">
@@ -1014,6 +1014,214 @@ ticketListSearch.addEventListener("input", () => {
   if (client) client.auth.onAuthStateChange(event => {
     if (event === "SIGNED_OUT") clearSession();
   });
+})();
+
+// ===== 回数券登録：1人に1枚 =====
+(() => {
+  const products = [
+    ['regular_5', 'パーソナル回数券（30分・5回券）', 5, 3],
+    ['regular_15', 'パーソナル回数券（30分・15回券）', 15, 6],
+    ['regular_30', 'パーソナル回数券（30分・30回券）', 30, 12],
+    ['regular_60', 'パーソナル回数券（30分・60回券）', 60, 24],
+    ['option_5', 'オプション回数券（30分・5回券）', 5, 3],
+    ['option_30', 'オプション回数券（30分・30回券）', 30, 12]
+  ];
+  function today() {
+    const parts = new Intl.DateTimeFormat('en-US', {timeZone:'Asia/Tokyo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+    const get = type => parts.find(part => part.type === type).value;
+    return `${get('year')}-${get('month')}-${get('day')}`;
+  }
+  function expiry(value, months) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return '';
+    const [year, month, day] = value.split('-').map(Number);
+    const input = new Date(Date.UTC(year, month - 1, day));
+    if (input.toISOString().slice(0,10) !== value) return '';
+    const target = new Date(Date.UTC(year, month - 1 + months, 1));
+    const last = new Date(Date.UTC(target.getUTCFullYear(),target.getUTCMonth()+1,0)).getUTCDate();
+    target.setUTCDate(Math.min(day,last));
+    return target.toISOString().slice(0,10);
+  }
+  const el = id => document.getElementById(id);
+  const view = document.createElement('section');
+  view.id = 'ticketRegisterView';
+  view.className = 'hidden';
+  view.innerHTML = `
+    <div class="card">
+      <h2>回数券登録</h2>
+      <button id="trBack" class="secondary" type="button">← ホームに戻る</button>
+      <p class="small">1人の会員に1枚の回数券を登録します。券種を選ぶと回数と期限が自動で入ります。</p>
+      <form id="trForm">
+        <fieldset id="trFields" style="border:0;padding:0;margin:0;min-width:0">
+          <label for="trStore">登録する店舗</label>
+          <select id="trStore" required style="width:100%;padding:12px;font-size:16px"><option value="">店舗を選択</option></select>
+          <label for="trMember">会員番号・名前で検索</label>
+          <input id="trMember" type="search" autocomplete="off" placeholder="会員番号または名前" disabled>
+          <div id="trCandidates"></div><p id="trSelected" class="small"></p>
+          <label for="trProduct">券種</label>
+          <select id="trProduct" required style="width:100%;padding:12px;font-size:16px"><option value="">券種を選択</option></select>
+          <label for="trNumber">管理番号</label>
+          <input id="trNumber" required maxlength="100" autocomplete="off" placeholder="回数券の管理番号を入力">
+          <label for="trDate">購入日</label><input id="trDate" type="date" required>
+          <div id="trPreview" class="info" aria-live="polite">券種を選ぶと回数・有効期限を表示します。</div>
+          <button id="trReview" class="primary" type="submit">登録内容を確認</button>
+        </fieldset>
+      </form>
+      <div id="trConfirm" class="hidden">
+        <h2 style="margin-top:16px">この内容で登録します</h2>
+        <div id="trSummary" class="info" style="white-space:pre-line;line-height:1.8"></div>
+        <button id="trEdit" class="secondary" type="button" style="margin-top:12px">入力に戻る</button>
+        <button id="trSave" class="primary" type="button">この内容で登録</button>
+      </div>
+      <p id="trStatus" role="status" aria-live="polite" style="white-space:pre-line"></p>
+      <button id="trRetryLoad" class="secondary hidden" type="button">店舗・会員を再読み込み</button>
+      <button id="trNext" class="secondary hidden" type="button">続けて登録する</button>
+    </div>`;
+  homeView.parentNode.appendChild(view);
+  const store = el('trStore'), search = el('trMember'), product = el('trProduct'), date = el('trDate');
+  const fields = el('trFields'), status = el('trStatus'), confirmBox = el('trConfirm'), save = el('trSave');
+  products.forEach(([code,name,,months]) => product.add(new Option(`${name}／${months}か月`,code)));
+  let members = [], selected = null, version = 0, busy = false, pending = null, draft = null;
+  const normalize = s => String(s ?? '').normalize('NFKC').toLowerCase().replace(/\s/g,'');
+  const memberName = m => `${m.current_member_number ?? ''} ${m.last_name || ''} ${m.first_name || ''}`.trim();
+  const storageKey = () => `kaisuken-ticket-pending-v1:${currentStaffId}`;
+  function preview() {
+    const item = products.find(p => p[0] === product.value);
+    const end = item && expiry(date.value,item[3]);
+    el('trPreview').textContent = end ? `${item[2]}回（1回30分）\n有効期限：${end}まで` : '券種と購入日を選ぶと回数・有効期限を表示します。';
+    el('trPreview').style.whiteSpace = 'pre-line';
+  }
+  function resetForm() {
+    el('trForm').reset(); el('trForm').classList.remove('hidden');
+    date.value = today(); date.max = today();
+    selected = null; members = []; draft = null;
+    search.disabled = true; fields.disabled = false;
+    el('trCandidates').replaceChildren(); el('trSelected').textContent = '';
+    confirmBox.classList.add('hidden'); el('trNext').classList.add('hidden');
+    el('trEdit').disabled = false; el('trBack').disabled = false;
+    save.disabled = false; save.textContent = 'この内容で登録';
+    status.textContent = ''; preview();
+  }
+  async function pages(makeQuery, token) {
+    const rows = [];
+    for (let offset=0; ; ) {
+      if (token !== version) return [];
+      const result = await makeQuery().range(offset,offset+499);
+      if (result.error) throw result.error;
+      if (!result.data?.length) return rows;
+      rows.push(...result.data); offset += result.data.length;
+    }
+  }
+  async function loadStoresForRegistration() {
+    const token = ++version;
+    fields.disabled = true; status.textContent = '店舗を読み込み中です…';
+    el('trRetryLoad').classList.add('hidden');
+    try {
+      const links = await pages(() => client.from('staff_stores').select('store_id').eq('staff_id',currentStaffId).order('store_id'),token);
+      const stores = await pages(() => client.from('stores').select('id,name').order('id'),token);
+      if (token !== version) return;
+      const allowed = new Set(links.map(link=>link.store_id));
+      store.replaceChildren(new Option('店舗を選択',''));
+      stores.filter(s=>allowed.has(s.id)).sort((a,b)=>a.name.localeCompare(b.name,'ja')).forEach(s=>store.add(new Option(s.name,s.id)));
+      fields.disabled = false;
+      status.textContent = allowed.size ? '今回登録する店舗を選んでください。' : '登録できる店舗がありません。管理者に確認してください。';
+    } catch (e) {
+      if (token !== version) return;
+      status.textContent = '店舗を取得できませんでした。再読み込みしてください。';
+      el('trRetryLoad').classList.remove('hidden');
+    }
+  }
+  async function loadMembers() {
+    const token = ++version;
+    selected = null; members = []; search.value = ''; search.disabled = true;
+    el('trSelected').textContent = ''; el('trCandidates').replaceChildren();
+    el('trRetryLoad').classList.add('hidden');
+    if (!store.value) {status.textContent='店舗を選択してください。';return;}
+    status.textContent = '会員を読み込み中です…';
+    try {
+      const links = await pages(() => client.from('member_stores').select('member_id').eq('store_id',store.value).order('member_id'),token);
+      const ids = [...new Set(links.map(l=>l.member_id))];
+      const list = [];
+      for (let i=0;i<ids.length;i+=100) list.push(...await pages(() => client.from('members').select('id,current_member_number,last_name,first_name').in('id',ids.slice(i,i+100)).order('id'),token));
+      if (token !== version) return;
+      members = list; search.disabled=false;
+      status.textContent = list.length ? '会員を検索して選んでください。' : 'この店舗に登録された会員はいません。';
+    } catch(e) {
+      if (token !== version) return;
+      status.textContent='会員を取得できませんでした。再読み込みしてください。';
+      el('trRetryLoad').classList.remove('hidden');
+    }
+  }
+  function showPending() {
+    fields.disabled=true; el('trEdit').disabled=true; el('trForm').classList.add('hidden');
+    confirmBox.classList.remove('hidden');
+    el('trSummary').textContent=pending.summary;
+    save.disabled=false; save.textContent='保存結果を確認・再試行';
+    status.textContent='前回の送信結果を確認します。同じ登録を重複して作成することはありません。';
+  }
+  async function open() {
+    if (!currentStaffId || !client) return;
+    version++; homeView.classList.add('hidden');view.classList.remove('hidden');resetForm();
+    try {pending=JSON.parse(sessionStorage.getItem(storageKey()) || 'null');}
+    catch(e) {fields.disabled=true;status.textContent='ブラウザーの保存領域を利用できません。再読み込みしてからお試しください。';return;}
+    if (pending) {showPending();return;}
+    await loadStoresForRegistration();
+  }
+  store.addEventListener('change',loadMembers);
+  search.addEventListener('input',()=>{
+    selected=null; el('trSelected').textContent=''; el('trCandidates').replaceChildren();
+    const keyword=normalize(search.value); if(!keyword)return;
+    const matches=members.filter(m=>normalize(memberName(m)).includes(keyword));
+    for(const member of matches.slice(0,20)) {
+      const button=document.createElement('button');button.type='button';button.className='secondary';
+      button.style.cssText='display:block;width:100%;text-align:left;margin-top:6px';button.textContent=memberName(member);
+      button.addEventListener('click',()=>{selected=member;search.value=memberName(member);el('trSelected').textContent=`選択中：${memberName(member)}`;el('trCandidates').replaceChildren();status.textContent='';});
+      el('trCandidates').appendChild(button);
+    }
+    if(!matches.length) el('trCandidates').textContent='該当する会員はいません。';
+    else if(matches.length>20) status.textContent='候補が多いため、番号や名前を追加して絞り込んでください。';
+  });
+  product.addEventListener('change',preview);date.addEventListener('change',preview);
+  el('trForm').addEventListener('submit',event=>{
+    event.preventDefault();if(busy||pending)return;
+    const item=products.find(p=>p[0]===product.value), end=item&&expiry(date.value,item[3]);
+    if(!store.value||!selected||!members.some(m=>m.id===selected.id)){status.textContent='店舗を選び、検索候補から会員を選択してください。';return;}
+    if(!item||!end||date.value>today()){status.textContent='券種と今日以前の購入日を指定してください。';return;}
+    const number=el('trNumber').value.trim();if(!number){status.textContent='管理番号を入力してください。';return;}
+    const summary=`登録先：${store.options[store.selectedIndex].text}\n会員：${memberName(selected)}\n${item[1]}\n管理番号：${number}\n購入日：${date.value}\n有効期限：${end}まで\n登録回数：${item[2]}回（1回30分）`;
+    draft={args:{p_request_id:crypto.randomUUID(),p_member_id:selected.id,p_store_id:store.value,p_product_code:item[0],p_management_number:number,p_purchase_date:date.value},summary};
+    el('trForm').classList.add('hidden'); el('trSummary').textContent=summary;confirmBox.classList.remove('hidden');fields.disabled=true;status.textContent='店舗・会員・管理番号をご確認ください。';
+  });
+  el('trEdit').addEventListener('click',()=>{if(busy||pending)return;draft=null;confirmBox.classList.add('hidden');el('trForm').classList.remove('hidden');fields.disabled=false;status.textContent='';});
+  save.addEventListener('click',async()=>{
+    if(busy||(!draft&&!pending))return;
+    const key=storageKey(); const token=version;
+    try {
+      if(!pending){sessionStorage.setItem(key,JSON.stringify(draft));pending=draft;}
+    } catch(e){status.textContent='二重登録を防ぐための情報を保存できませんでした。登録は行っていません。';return;}
+    busy=true;save.disabled=true;el('trEdit').disabled=true;el('trBack').disabled=true;status.textContent='登録中です…';
+    try {
+      const result=await client.rpc('register_single_ticket',pending.args);
+      if(result.error)throw result.error;
+      if(!result.data?.success)throw new Error('保存結果を確認できませんでした。');
+      sessionStorage.removeItem(key);
+      if(token!==version)return;
+      pending=null;draft=null;confirmBox.classList.add('hidden');
+      status.textContent='回数券を登録しました。回数券一覧から確認できます。';
+      el('trNext').classList.remove('hidden');
+    } catch(e) {
+      if(token!==version)return;
+      // SQL errors are transactional failures; transport errors may follow a commit.
+      if(/^(P0001|22|23|42501)/.test(String(e.code||''))) {
+        sessionStorage.removeItem(key);pending=null;draft=null;confirmBox.classList.add('hidden');el('trForm').classList.remove('hidden');fields.disabled=false;el('trEdit').disabled=false;
+        status.textContent=`登録できませんでした。${e.message || '入力内容を確認してください。'}`;
+      } else {showPending();status.textContent='通信が途切れた可能性があります。「保存結果を確認・再試行」を押してください。登録内容はそのまま保持しています。';}
+    } finally {busy=false;if(token===version){save.disabled=false;el('trBack').disabled=false;}}
+  });
+  el('trNext').addEventListener('click',open);
+  el('trRetryLoad').addEventListener('click',()=>store.value?loadMembers():loadStoresForRegistration());
+  el('trBack').addEventListener('click',()=>{if(busy)return;version++;view.classList.add('hidden');homeView.classList.remove('hidden');});
+  el('ticketRegisterBtn').addEventListener('click',open);
+  if(client)client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){version++;pending=null;draft=null;members=[];selected=null;view.classList.add('hidden');}});
 })();
 
 restoreSession();
