@@ -72,6 +72,7 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
         <button id="usageBtn" class="homebtn"><strong>利用登録</strong><span>利用内容を記録する</span></button> 
         <button id="ticketListBtn" class="homebtn"><strong>回数券一覧</strong><span>残り回数・有効期限を確認</span></button>
         <button id="historyBtn" class="homebtn"><strong>利用履歴</strong><span>過去の利用内容を確認</span></button>
+        <button id="memberListBtn" class="homebtn"><strong>会員一覧</strong><span>会員情報・所属店舗を確認</span></button>
         <button id="memberRegisterBtn" class="homebtn"><strong>会員登録</strong><span>新しい会員を登録する</span></button>
         <button id="ticketRegisterBtn" class="homebtn"><strong>回数券登録</strong><span>購入した回数券を登録</span></button>
       </div>
@@ -1288,8 +1289,65 @@ ticketListSearch.addEventListener("input", () => {
  if(client)client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){version++;hide(view,true);pending=null;draft=null;allowed.clear();form.reset();get('mrSummary').textContent='';}});
 })();
 
+// ===== 会員一覧（読み取り専用） =====
+(() => {
+ const el=id=>document.getElementById(id);
+ const view=document.createElement('section');view.id='memberListView';view.className='hidden';
+ view.innerHTML=`<div class="card"><h2>会員一覧</h2>
+ <button id="mlBack" type="button" class="secondary">← ホームに戻る</button>
+ <p class="small">回数券の有無にかかわらず、登録されている会員を確認できます。</p>
+ <label for="mlStore">所属店舗</label><select id="mlStore" style="width:100%;padding:12px;font-size:16px"><option value="">すべての店舗</option></select>
+ <label for="mlSearch">会員番号・名前で検索</label><input id="mlSearch" type="search" autocomplete="off" placeholder="会員番号または名前">
+ <button id="mlRefresh" type="button" class="secondary" style="margin-top:12px">一覧を更新</button>
+ <p id="mlStatus" role="status" aria-live="polite" class="small"></p>
+ <div id="mlResults" aria-busy="false"></div></div>`;
+ homeView.parentNode.appendChild(view);
+ const store=el('mlStore'),search=el('mlSearch'),status=el('mlStatus'),results=el('mlResults'),refresh=el('mlRefresh');
+ let version=0,records=[],loaded=false;
+ const normalize=v=>String(v??'').normalize('NFKC').toLowerCase().replace(/\s/g,'');
+ async function pages(make,token){const rows=[];for(let offset=0;;){if(token!==version)return [];const r=await make().range(offset,offset+499);if(r.error)throw r.error;if(!r.data?.length)return rows;rows.push(...r.data);offset+=r.data.length;}}
+ function render(){if(!loaded)return;results.replaceChildren();const term=normalize(search.value);
+  const matches=records.filter(r=>(!store.value||r.stores.has(store.value))&&(!term||r.search.includes(term)));
+  status.textContent=`${matches.length}件 / 登録会員 ${records.length}件`;
+  if(!matches.length){results.textContent=records.length?'該当する会員はいません。':'登録されている会員はいません。';return;}
+  let shown=0;const more=document.createElement('button');more.type='button';more.className='secondary';more.textContent='次の50件を表示';
+  function append(){more.remove();const end=Math.min(shown+50,matches.length);for(;shown<end;shown++){
+   const r=matches[shown],card=document.createElement('article');card.className='card';
+   const number=document.createElement('div');number.className='small';number.textContent=`会員番号：${r.member.current_member_number||'未登録'}`;
+   const name=document.createElement('strong');name.textContent=r.name||'氏名未登録';
+   const stores=document.createElement('div');stores.style.marginTop='8px';stores.style.whiteSpace='pre-line';stores.textContent=`所属店舗：${r.storeNames.join('・')||'未登録'}`;
+   card.append(number,name,stores);results.appendChild(card);
+  }if(shown<matches.length)results.appendChild(more);}
+  more.addEventListener('click',append);append();
+ }
+ function reset(){version++;records=[];loaded=false;results.replaceChildren();results.setAttribute('aria-busy','false');refresh.disabled=false;status.textContent='';}
+ async function load(){reset();const token=version;refresh.disabled=true;results.setAttribute('aria-busy','true');status.textContent='会員を読み込み中です…';
+  try{if(!client||!currentStaffId)throw Error('ログインが必要です');
+   const [members,links,stores]=await Promise.all([
+    pages(()=>client.from('members').select('id,current_member_number,last_name,first_name').order('id'),token),
+    pages(()=>client.from('member_stores').select('member_id,store_id').order('member_id').order('store_id'),token),
+    pages(()=>client.from('stores').select('id,name').order('id'),token)
+   ]);if(token!==version)return;
+   const storeMap=new Map(stores.map(s=>[s.id,s.name])),memberStores=new Map();
+   for(const link of links){if(!memberStores.has(link.member_id))memberStores.set(link.member_id,new Set());memberStores.get(link.member_id).add(link.store_id);}
+   records=members.map(m=>{const name=`${m.last_name||''} ${m.first_name||''}`.trim(),ids=memberStores.get(m.id)||new Set();return {member:m,name,stores:ids,storeNames:[...ids].map(id=>storeMap.get(id)||'店舗情報なし').sort((a,b)=>a.localeCompare(b,'ja')),search:normalize(`${m.current_member_number??''} ${name}`)};});
+   records.sort((a,b)=>String(a.member.current_member_number??'').localeCompare(String(b.member.current_member_number??''),'ja',{numeric:true})||a.name.localeCompare(b.name,'ja')||String(a.member.id).localeCompare(String(b.member.id)));
+   const selected=store.value;store.replaceChildren(new Option('すべての店舗',''));stores.sort((a,b)=>a.name.localeCompare(b.name,'ja')).forEach(s=>store.add(new Option(s.name,s.id)));
+   const unknown=new Set(links.map(l=>l.store_id).filter(id=>id!=null&&!storeMap.has(id)));for(const id of unknown)store.add(new Option('店舗情報なし',id));
+   store.value=selected;if(store.selectedIndex<0)store.value='';loaded=true;render();
+  }catch(e){if(token!==version)return;status.textContent='会員一覧を取得できませんでした。ログイン状態・通信状態を確認し、「一覧を更新」で再試行してください。';}
+  finally{if(token===version){refresh.disabled=false;results.setAttribute('aria-busy','false');}}
+ }
+ el('memberListBtn').addEventListener('click',()=>{homeView.classList.add('hidden');view.classList.remove('hidden');return load();});
+ el('mlBack').addEventListener('click',()=>{reset();view.classList.add('hidden');homeView.classList.remove('hidden');});
+ store.addEventListener('change',render);search.addEventListener('input',render);refresh.addEventListener('click',load);
+ function clear(){reset();view.classList.add('hidden');search.value='';store.replaceChildren(new Option('すべての店舗',''));}
+ el('logoutBtn').addEventListener('click',clear);if(client)client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT')clear();});
+})();
+
 restoreSession();
 </script>
 </body>
 </html>
+
 
