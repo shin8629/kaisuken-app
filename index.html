@@ -30,6 +30,14 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
 .hidden{display:none}
 .badge{display:inline-block;background:#edf4fb;border-radius:999px;padding:5px 8px;font-size:11px;font-weight:800;margin:3px 4px 0 0}
 </style>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#0b63a5">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="回数券管理">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
 </head>
 <body>
 <div class="wrap">
@@ -200,6 +208,30 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
   </div>
 </div>
 
+<script>
+(() => {
+ const bar=document.createElement('div');bar.style.cssText='padding:8px 16px;background:#f4f8fc';
+ bar.innerHTML=`<details id="pwaHelp"><summary style="cursor:pointer;font-size:13px;color:#0b63a5">ホーム画面に追加する</summary>
+ <p class="small">iPhone・iPad：Safariの共有メニューから「ホーム画面に追加」を選びます。「Webアプリとして開く」が表示されたらオンにしてください。</p>
+ <p class="small">Android：Chromeのメニューから「ホーム画面に追加」または「アプリをインストール」を選びます。</p>
+ <button id="pwaInstall" type="button" class="secondary" hidden>アプリを追加</button><p id="pwaInstallStatus" class="small" role="status"></p></details>
+ <div id="pwaOffline" role="alert" hidden><strong>インターネットに接続してください</strong><p class="small">通信が戻るまで操作を停止しています。表示中の情報は最新ではない可能性があります。送信中に切れた場合は、再送信する前に登録結果をご確認ください。</p></div>`;
+ document.querySelector('.header').after(bar);
+ const help=document.getElementById('pwaHelp'),button=document.getElementById('pwaInstall'),status=document.getElementById('pwaInstallStatus'),content=document.querySelector('.content');
+ const standalone=window.matchMedia('(display-mode: standalone)');
+ function mode(){help.hidden=standalone.matches||window.navigator.standalone===true;}
+ mode();standalone.addEventListener?.('change',mode);
+ let installPrompt=null;
+ window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installPrompt=event;button.hidden=false;});
+ button.addEventListener('click',async()=>{if(!installPrompt)return;const prompt=installPrompt;installPrompt=null;button.disabled=true;try{await prompt.prompt();const choice=await prompt.userChoice;status.textContent=choice.outcome==='accepted'?'追加操作を受け付けました。ホーム画面をご確認ください。':'後からブラウザーのメニューでも追加できます。';}catch(e){status.textContent='ブラウザーのメニューからホーム画面に追加してください。';}finally{button.hidden=true;button.disabled=false;}});
+ window.addEventListener('appinstalled',()=>{installPrompt=null;button.hidden=true;help.hidden=true;});
+ function network(){const offline=!navigator.onLine;document.getElementById('pwaOffline').hidden=!offline;content.inert=offline;content.style.opacity=offline?'.45':'';}
+ window.addEventListener('offline',network);window.addEventListener('online',network);network();
+ for(const name of ['click','submit'])content.addEventListener(name,event=>{if(!navigator.onLine){event.preventDefault();event.stopImmediatePropagation();network();}},true);
+ if('serviceWorker' in navigator)window.addEventListener('load',()=>{navigator.serviceWorker.register('./sw.js',{scope:'./',updateViaCache:'none'}).catch(()=>{status.textContent='起動設定を取得できませんでした。通信状態を確認して再度開いてください。';});});
+})();
+
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const SUPABASE_URL = "https://zlaumybejdrjobwpofqp.supabase.co";
@@ -1436,6 +1468,7 @@ restoreSession();
 </script>
 </body>
 </html>
+
 
 
 
