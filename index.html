@@ -1343,7 +1343,10 @@ ticketListSearch.addEventListener("input", () => {
    const number=document.createElement('div');number.className='small';number.textContent=`会員番号：${r.member.current_member_number||'未登録'}`;
    const name=document.createElement('strong');name.textContent=r.name||'氏名未登録';
    const stores=document.createElement('div');stores.style.marginTop='8px';stores.style.whiteSpace='pre-line';stores.textContent=`所属店舗：${r.storeNames.join('・')||'未登録'}`;
-   card.append(number,name,stores);results.appendChild(card);
+   card.append(number,name,stores);
+   const add=document.createElement('button');add.type='button';add.className='secondary';add.style.marginTop='10px';add.textContent='所属店舗を追加';
+   add.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('member-store-open',{detail:{id:r.member.id,number:r.member.current_member_number||'',name:r.name}})));
+   card.appendChild(add);results.appendChild(card);
   }if(shown<matches.length)results.appendChild(more);}
   more.addEventListener('click',append);append();
  }
@@ -1372,10 +1375,68 @@ ticketListSearch.addEventListener("input", () => {
  el('logoutBtn').addEventListener('click',clear);if(client)client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT')clear();});
 })();
 
+// Existing staff RLS and the (member_id, store_id) primary key remain in force.
+(() => {
+ const el=id=>document.getElementById(id),view=document.createElement('section');
+ view.id='memberStoreAddView';view.className='hidden';
+ view.innerHTML=`<div class="card"><h2>所属店舗を追加</h2>
+ <button id="msBack" type="button" class="secondary">← 会員一覧に戻る</button>
+ <p id="msMember" style="white-space:pre-line"></p>
+ <p class="small">現在の所属店舗を残して追加します。回数券・利用履歴は同じ会員に引き継がれます。</p>
+ <p id="msCurrent"></p><label for="msStore">追加する店舗</label>
+ <select id="msStore" style="width:100%;padding:12px;font-size:16px" disabled><option value="">店舗を選択</option></select>
+ <button id="msReview" class="primary" type="button" disabled>追加内容を確認</button>
+ <div id="msConfirm" class="hidden"><p id="msSummary" class="info" style="white-space:pre-line"></p>
+ <button id="msEdit" class="secondary" type="button">選び直す</button>
+ <button id="msSave" class="primary" type="button">この店舗を追加</button></div>
+ <p id="msStatus" role="status" aria-live="polite"></p>
+ <button id="msRetry" class="secondary hidden" type="button">店舗を再読み込み</button></div>`;
+ homeView.parentNode.appendChild(view);
+ let generation=0,member=null,choices=new Map(),busy=false,target=null;
+ const select=el('msStore'),status=el('msStatus'),hide=(id,yes)=>el(id).classList.toggle('hidden',yes);
+ async function pages(make,token){let all=[];for(let start=0;;){if(token!==generation)return [];const r=await make().range(start,start+499);if(r.error)throw r.error;if(!r.data?.length)return all;all.push(...r.data);start+=r.data.length;}}
+ async function load(){const token=++generation;target=null;choices.clear();select.disabled=true;el('msReview').disabled=true;hide('msConfirm',true);hide('msRetry',true);hide('msReview',false);select.replaceChildren(new Option('店舗を選択',''));status.textContent='所属店舗を確認しています…';
+  try{
+   const [links,staffLinks,stores]=await Promise.all([
+    pages(()=>client.from('member_stores').select('store_id').eq('member_id',member.id).order('store_id'),token),
+    pages(()=>client.from('staff_stores').select('store_id').eq('staff_id',currentStaffId).order('store_id'),token),
+    pages(()=>client.from('stores').select('id,name').order('id'),token)]);
+   if(token!==generation)return;
+   const current=new Set(links.map(x=>x.store_id)),allowed=new Set(staffLinks.map(x=>x.store_id)),names=new Map(stores.map(x=>[x.id,x.name]));
+   el('msCurrent').textContent='現在の所属：'+([...current].map(id=>names.get(id)||'店舗情報なし').join('・')||'未登録');
+   for(const s of stores.sort((a,b)=>a.name.localeCompare(b.name,'ja')))if(allowed.has(s.id)&&!current.has(s.id)){choices.set(s.id,s.name);select.add(new Option(s.name,s.id));}
+   select.disabled=!choices.size;el('msReview').disabled=!choices.size;status.textContent=choices.size?'追加する店舗を選んでください。':'追加できる店舗はありません（担当店舗にはすべて所属済み、または担当店舗がありません）。';
+  }catch(e){if(token!==generation)return;status.textContent='店舗情報を取得できませんでした。再読み込みしてください。';hide('msRetry',false);}
+ }
+ document.addEventListener('member-store-open',event=>{if(busy||!currentStaffId)return;member=event.detail;el('msMember').textContent=`会員番号：${member.number}\n氏名：${member.name}`;el('msCurrent').textContent='';el('memberListView').classList.add('hidden');view.classList.remove('hidden');el('msBack').disabled=false;load();});
+ el('msReview').addEventListener('click',()=>{if(busy||!choices.has(select.value)){status.textContent='追加する店舗を選択してください。';return;}target={memberId:member.id,storeId:select.value,name:choices.get(select.value)};el('msSummary').textContent=`${member.number} ${member.name}\n追加する店舗：${target.name}\n現在の所属店舗はそのまま残ります。`;select.disabled=true;hide('msReview',true);hide('msConfirm',false);el('msEdit').disabled=false;el('msSave').disabled=false;el('msSave').textContent='この店舗を追加';status.textContent='会員と追加する店舗をご確認ください。';});
+ el('msEdit').addEventListener('click',()=>{if(busy)return;target=null;select.disabled=false;hide('msConfirm',true);hide('msReview',false);status.textContent='';});
+ el('msSave').addEventListener('click',async()=>{
+  if(busy||!target)return;busy=true;const token=generation,request={...target};el('msBack').disabled=true;el('msSave').disabled=true;el('msEdit').disabled=true;status.textContent='所属店舗を追加しています…';
+  try{
+   const permission=await client.from('staff_stores').select('store_id').eq('staff_id',currentStaffId).eq('store_id',request.storeId).limit(1);
+   if(permission.error)throw permission.error;if(!permission.data?.length)throw {code:'42501',message:'この店舗は現在の担当店舗ではありません。'};
+   if(token!==generation)return;
+   const result=await client.from('member_stores').upsert({member_id:request.memberId,store_id:request.storeId},{onConflict:'member_id,store_id',ignoreDuplicates:true});
+   if(result.error)throw result.error;
+   const check=await client.from('member_stores').select('store_id').eq('member_id',request.memberId).eq('store_id',request.storeId).limit(1);
+   if(check.error)throw check.error;if(!check.data?.length)throw Error('確認できませんでした');if(token!==generation)return;
+   hide('msConfirm',true);target=null;status.textContent=`${request.name}への所属を確認しました。会員一覧に戻ると最新の所属店舗を確認できます。`;
+  }catch(e){if(token!==generation)return;
+   if(/^(22|23|42501)/.test(String(e.code||''))){status.textContent='追加できませんでした。'+(e.message||'店舗と会員情報を確認してください。');el('msEdit').disabled=false;}
+   else {status.textContent='保存結果を確認できませんでした。同じ内容で再試行できます。重複して追加されることはありません。';el('msSave').textContent='保存結果を確認・再試行';}
+  }finally{busy=false;if(token===generation){el('msBack').disabled=false;el('msSave').disabled=false;}}
+ });
+ el('msRetry').addEventListener('click',load);
+ el('msBack').addEventListener('click',()=>{if(busy)return;generation++;view.classList.add('hidden');el('memberListBtn').click();});
+ client?.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){generation++;member=null;target=null;choices.clear();view.classList.add('hidden');el('msMember').textContent='';el('msSummary').textContent='';}});
+})();
+
 restoreSession();
 </script>
 </body>
 </html>
+
 
 
 
