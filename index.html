@@ -241,6 +241,7 @@ const configured =
   !SUPABASE_URL.includes("YOUR_SUPABASE") &&
   !SUPABASE_PUBLISHABLE_KEY.includes("YOUR_SUPABASE");
 
+const authEntryHash = new URLSearchParams(location.hash.slice(1));
 const client = configured
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
   : null;
@@ -302,6 +303,7 @@ async function loadStaff(user){
 async function restoreSession(){
   if (!configured) return;
   const { data } = await client.auth.getSession();
+  if (await accountSetup.route()) return;
   const user = data?.session?.user;
   if (!user) return;
   try {
@@ -1479,7 +1481,7 @@ ticketListSearch.addEventListener("input", () => {
  view.innerHTML=`<div class="card"><h2>スタッフ管理</h2>
  <button id="smBack" type="button" class="secondary">← ホームに戻る</button>
  <p class="small">登録・変更は管理者のみ操作できます。所属店舗は複数選べます。利用停止後も過去の利用履歴は残ります。</p>
- <p id="smSetup" class="info small hidden">新しいスタッフのログインは準備中です。名前・メールアドレス・所属店舗は先に登録できます。確認メールの送信設定が完了したら、本人がログイン画面から初回登録できます。</p>
+ <p id="smSetup" class="info small hidden">新しいスタッフのログインは準備中です。名前・メールアドレス・所属店舗は先に登録できます。メール送信の準備が完了したら、この画面から本人へ設定メールを送れます。</p>
  <div id="smListPanel"><button id="smNew" type="button" class="primary" disabled>スタッフを登録</button>
  <button id="smRefresh" type="button" class="secondary" style="margin-top:10px">一覧を更新</button>
  <div id="smList" style="margin-top:14px"></div></div>
@@ -1508,7 +1510,18 @@ ticketListSearch.addEventListener("input", () => {
   const email=document.createElement('p');email.className='small';email.textContent=staff.email;
   const detail=document.createElement('p');detail.style.whiteSpace='pre-line';detail.textContent=`${staff.admin?'管理者（あなた）':'一般スタッフ'}・${staff.active?(staff.linked?'利用可能':'初回ログイン待ち'):'利用停止'}\n所属店舗：${stores.filter(s=>staff.store_ids.includes(s.id)).map(s=>s.name).join('・')||'未設定'}`;
   const edit=document.createElement('button');edit.type='button';edit.className='secondary';edit.textContent='名前・所属店舗・利用状態を変更';edit.addEventListener('click',()=>editStaff(staff));
-  card.append(name,email,detail,edit);list.appendChild(card);
+  card.append(name,email,detail,edit);
+  if(staff.active&&!staff.admin){
+   const send=document.createElement('button');send.className='primary';send.type='button';send.textContent=staff.linked?'パスワード再設定メールを送る':'本人確認・パスワード設定メールを送る';send.disabled=!onboardingReady;
+   send.addEventListener('click',async()=>{
+    if(!window.confirm(staff.name+'（'+staff.email+'）へ設定メールを送信します。よろしいですか？'))return;
+    send.disabled=true;status.textContent='メールを送信しています…';
+    try{const r=await client.functions.invoke('staff-invite',{body:{staff_id:staff.id}});if(r.error||r.data?.ok!==true)throw Error();status.textContent='設定メールを送信しました。本人にメールのURLからパスワードを設定してもらってください。';}
+    catch{status.textContent='送信を確認できませんでした。届いていない場合は1分以上あけて再送してください。';}
+    finally{send.disabled=false;}
+   });card.append(send);
+  }
+  list.appendChild(card);
  }}
  async function load(){const token=++version;records=[];stores=[];list.replaceChildren();el('smNew').disabled=true;el('smRefresh').disabled=true;status.textContent='スタッフを読み込み中です…';
   try{const r=await client.rpc('staff_management_list');if(r.error)throw r.error;if(token!==version)return;
@@ -1519,7 +1532,7 @@ ticketListSearch.addEventListener("input", () => {
  function showPending(){hide(el('smListPanel'),true);hide(form,true);hide(confirm,false);el('smSummary').textContent=pending.summary;el('smEdit').disabled=true;el('smSave').textContent='保存結果を確認・再試行';status.textContent='前回の保存結果を確認できていません。同じ内容で確認・再試行してください。';}
  function editStaff(staff=null){if(busy||pending||!stores.length)return;editing=staff;draft=null;hide(el('smListPanel'),true);hide(form,false);hide(confirm,true);form.reset();fields.disabled=false;
   el('smTitle').textContent=staff?'スタッフ情報を変更':'スタッフを登録';el('smName').value=staff?.name||'';el('smEmail').value=staff?.email||'';el('smEmail').disabled=!!staff?.linked;
-  el('smEmailHelp').textContent=staff?.linked?'ログイン開始済みのため、メールアドレスは変更できません。':'本人が初回ログインに使うメールアドレスを入力してください。';
+  el('smEmailHelp').textContent=staff?.linked?'ログイン開始済みのため、メールアドレスは変更できません。':'本人確認・パスワード設定メールの送信先を入力してください。';
   el('smActive').value=String(staff?.active??true);el('smActive').disabled=!staff||staff.admin;
   const holder=el('smStores');holder.replaceChildren();for(const s of stores){const label=document.createElement('label');label.style.cssText='display:flex;align-items:center;gap:10px;margin:8px 0;font-size:15px';const check=document.createElement('input');check.type='checkbox';check.value=s.id;check.style.width='22px';check.checked=!!staff?.store_ids.includes(s.id);label.append(check,document.createTextNode(s.name));holder.appendChild(label);}
   status.textContent='';
@@ -1552,33 +1565,51 @@ ticketListSearch.addEventListener("input", () => {
  client?.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){version++;roleVersion++;hide(button,true);hide(view,true);records=[];stores=[];draft=null;pending=null;editing=null;list.replaceChildren();form.reset();el('smSummary').textContent='';}});
 })();
 
-// Each staff member sets their own password and confirms their own email.
-(() => {
- if(!client)return;
- const el=id=>document.getElementById(id),hide=(node,yes)=>node.classList.toggle('hidden',yes);
- const box=document.createElement('details');box.style.marginTop='18px';box.innerHTML=`<summary style="color:#0b63a5;cursor:pointer">初めて利用するスタッフはこちら</summary>
- <p class="small">管理者に名前・メールアドレス・所属店舗を登録してもらってから、ご本人が操作してください。</p>
- <p id="saStatus" role="status" aria-live="polite">初回登録の準備状況を確認しています…</p>
- <form id="saForm" class="hidden"><fieldset id="saFields" style="border:0;padding:0;margin:0">
- <label for="saEmail">登録してもらったメールアドレス</label><input id="saEmail" type="email" required maxlength="254" autocomplete="username" autocapitalize="none">
- <label for="saPassword">自分のパスワード（12文字以上）</label><input id="saPassword" type="password" required minlength="12" maxlength="128" autocomplete="new-password">
- <label for="saPasswordAgain">パスワードをもう一度</label><input id="saPasswordAgain" type="password" required minlength="12" maxlength="128" autocomplete="new-password">
- <button type="submit" class="primary">初回登録の確認メールを送る</button></fieldset></form>`;
- loginView.appendChild(box);let busy=false,ready=false;
- box.addEventListener('toggle',async()=>{if(!box.open||busy)return;const status=el('saStatus');hide(el('saForm'),true);ready=false;
-  try{const r=await client.rpc('staff_signup_ready');if(r.error)throw r.error;ready=r.data===true;hide(el('saForm'),!ready);status.textContent=ready?'登録後、届いたメールの確認リンクを開いてください。':'初回ログインの準備中です。管理者へお知らせください。登録済みの方は上のログイン欄をご利用ください。';}
-  catch(e){status.textContent='準備状況を確認できません。通信状態を確認して開き直してください。';}
+// Email callback is routed before restoring the application session.
+const accountSetup = (() => {
+ const mode=new URLSearchParams(location.search).get('account');
+ const hash=authEntryHash;
+ let required=mode==='setup'||['invite','recovery'].includes(hash.get('type'));
+ let busy=false;
+ const section=document.createElement('section');section.className='card hidden';section.id='accountSetupView';
+ section.innerHTML='<h2>本人確認・パスワード設定</h2><p>メールアドレスの確認後、ご自身のパスワードを設定してください。</p><p id="asEmail"></p><form id="asForm" class="hidden"><fieldset id="asFields" style="border:0;padding:0"><label for="asPassword">パスワード（12文字以上）</label><input id="asPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required><label for="asAgain">パスワードをもう一度</label><input id="asAgain" type="password" autocomplete="new-password" minlength="12" maxlength="128" required><button class="primary" type="submit">パスワードを設定して利用開始</button></fieldset></form><p id="asStatus" role="status" aria-live="polite"></p><button id="asExit" type="button" class="secondary">ログイン画面へ戻る</button>';
+ loginView.parentNode.append(section);
+ const el=id=>document.getElementById(id);
+ function show(){loginView.classList.add('hidden');appView.classList.add('hidden');section.classList.remove('hidden');}
+ async function route(){
+  if(!client)return false;
+  if(!required)return false;
+  show();if(hash.has('error')||hash.has('error_code')){el('asStatus').textContent='リンクの有効期限が切れています。管理者にメールの再送を依頼してください。';return true;}el('asStatus').textContent='メールの確認状況を確認しています…';
+  const result=await client.auth.getUser();
+  if(result.error||!result.data.user||!result.data.user.email_confirmed_at){
+   el('asStatus').textContent='リンクの有効期限が切れているか、確認できません。管理者にメールの再送を依頼してください。';
+   el('asForm').classList.add('hidden');return true;
+  }
+  el('asEmail').textContent=result.data.user.email;
+  el('asForm').classList.remove('hidden');el('asStatus').textContent='メールアドレスを確認できました。パスワードを設定してください。';return true;
+ }
+ el('asForm').addEventListener('submit',async event=>{
+  event.preventDefault();if(busy)return;
+  const password=el('asPassword').value;
+  if(password.length<12||password.length>128||password!==el('asAgain').value){el('asStatus').textContent='12〜128文字で、同じパスワードを2回入力してください。';return;}
+  busy=true;el('asFields').disabled=true;el('asExit').disabled=true;
+  try{
+   const changed=await client.auth.updateUser({password});if(changed.error)throw changed.error;
+   el('asPassword').value='';el('asAgain').value='';
+   await loadStaff(changed.data.user);
+   required=false;section.classList.add('hidden');history.replaceState(null,'',location.pathname);
+  }catch(error){el('asStatus').textContent=error.code==='same_password'?'現在と異なるパスワードを設定してください。':'設定を完了できませんでした。通信状態を確認して再試行してください。利用停止中の場合は管理者に確認してください。';}
+  finally{busy=false;el('asFields').disabled=false;el('asExit').disabled=false;}
  });
- el('saForm').addEventListener('submit',async event=>{event.preventDefault();if(busy||!ready)return;const status=el('saStatus'),password=el('saPassword').value;
-  if(password!==el('saPasswordAgain').value){status.textContent='2つのパスワードが一致しません。';return;}
-  busy=true;el('saFields').disabled=true;status.textContent='確認メールを送信しています…';
-  try{const r=await client.auth.signUp({email:el('saEmail').value.trim().toLowerCase(),password,options:{emailRedirectTo:'https://shin8629.github.io/kaisuken-app/'}});if(r.error)throw r.error;
-   status.textContent='確認メールをご確認ください。届かない場合は迷惑メールやアドレスを確認してください。すでに登録済みの方は上のログイン欄をご利用ください。';
-   if(r.data?.session){await loadStaff(r.data.user);box.open=false;}
-  }catch(e){status.textContent=e.code==='over_email_send_rate_limit'?'送信回数の上限に達しました。時間を置いてからお試しください。':'確認メールを送れませんでした。メールアドレスを確認し、管理者に連絡してください。';}
-  finally{el('saPassword').value='';el('saPasswordAgain').value='';el('saFields').disabled=false;busy=false;}
+ el('asExit').addEventListener('click',async()=>{
+  if(busy)return;await client.auth.signOut();required=false;el('asForm').reset();section.classList.add('hidden');loginView.classList.remove('hidden');history.replaceState(null,'',location.pathname);
  });
+ client?.auth.onAuthStateChange(event=>{
+  if(event==='PASSWORD_RECOVERY'){required=true;setTimeout(()=>route(),0);}
+ });
+ return {route};
 })();
+
 
 restoreSession();
 </script>
