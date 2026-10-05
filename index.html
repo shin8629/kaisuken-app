@@ -1478,7 +1478,7 @@ ticketListSearch.addEventListener("input", () => {
  const view=document.createElement('section');view.id='staffManageView';view.className='hidden';
  view.innerHTML=`<div class="card"><h2>スタッフ管理</h2>
  <button id="smBack" type="button" class="secondary">← ホームに戻る</button>
- <p class="small">登録・変更は管理者のみ操作できます。所属店舗は複数選べます。利用停止後も過去の利用履歴は残ります。</p>
+ <p class="small">登録・変更は権限のあるスタッフが操作できます。権限の付与・解除は管理者のみ行えます。所属店舗は複数選べます。利用停止後も過去の利用履歴は残ります。</p>
  <p id="smSetup" class="info small hidden">新しいスタッフのログインは準備中です。名前・メールアドレス・所属店舗は先に登録できます。メール送信の準備が完了したら、この画面から本人へ設定メールを送れます。</p>
  <div id="smListPanel"><button id="smNew" type="button" class="primary" disabled>スタッフを登録</button>
  <button id="smRefresh" type="button" class="secondary" style="margin-top:10px">一覧を更新</button>
@@ -1488,8 +1488,8 @@ ticketListSearch.addEventListener("input", () => {
  <label for="smName">スタッフ名</label><input id="smName" maxlength="100" required autocomplete="off">
  <label for="smEmail">本人のメールアドレス</label><input id="smEmail" type="email" maxlength="254" required autocomplete="off" autocapitalize="none">
  <p id="smEmailHelp" class="small"></p>
- <div id="smPasswordGroup"><label for="smPassword">ログイン用パスワード（12文字以上）</label><input id="smPassword" type="password" minlength="12" maxlength="128" autocomplete="new-password">
- <label for="smPasswordAgain">パスワードをもう一度</label><input id="smPasswordAgain" type="password" minlength="12" maxlength="128" autocomplete="new-password">
+ <div id="smPasswordGroup"><label for="smPassword">ログイン用パスワード（8文字以上）</label><input id="smPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password">
+ <label for="smPasswordAgain">パスワードをもう一度</label><input id="smPasswordAgain" type="password" minlength="8" maxlength="128" autocomplete="new-password">
  <p class="small">登録したメールアドレスとパスワードで、そのままログインできます。パスワードはスタッフ本人へお伝えください。保存後は表示できません。</p></div>
  <fieldset style="border:1px solid #d8e1ea;border-radius:10px;margin:14px 0;padding:12px"><legend>所属店舗（複数選択可）</legend><div id="smStores"></div></fieldset>
  <label for="smActive">利用状態</label><select id="smActive" style="width:100%;padding:12px;font-size:16px"><option value="true">利用可能</option><option value="false">利用停止</option></select>
@@ -1500,23 +1500,37 @@ ticketListSearch.addEventListener("input", () => {
  <p id="smStatus" role="status" aria-live="polite"></p></div>`;
  homeView.parentNode.appendChild(view);
  const status=el('smStatus'),form=el('smForm'),fields=el('smFields'),list=el('smList'),confirm=el('smConfirm');
- let accountPassword='',version=0,roleVersion=0,busy=false,records=[],stores=[],draft=null,pending=null,editing=null,onboardingReady=false;
+ let accountPassword='',version=0,roleVersion=0,busy=false,records=[],stores=[],draft=null,pending=null,editing=null,onboardingReady=false,isOwner=false;
  const key=()=>`staff-admin-pending:${currentStaffId}`;
  function message(error){return /^(P0001|22|23|42501)/.test(String(error?.code||''))?error.message:'通信状態を確認して、もう一度お試しください。';}
- async function role(){const token=++roleVersion;hide(button,true);if(!client||!currentStaffId)return;try{const r=await client.rpc('is_staff_admin');if(token===roleVersion&&!r.error&&r.data===true)hide(button,false);}catch(e){/* Remain hidden on permission/network errors. */}}
+ async function role(){const token=++roleVersion;hide(button,true);if(!client||!currentStaffId)return;try{const r=await client.rpc('is_staff_manager');if(token===roleVersion&&!r.error&&r.data===true)hide(button,false);}catch(e){/* Remain hidden on permission/network errors. */}}
  document.addEventListener('staff-session-ready',role);
  function render(){list.replaceChildren();for(const staff of records){
   const card=document.createElement('article');card.className='card';
   const name=document.createElement('strong');name.textContent=staff.name;
   const email=document.createElement('p');email.className='small';email.textContent=staff.email;
-  const detail=document.createElement('p');detail.style.whiteSpace='pre-line';detail.textContent=`${staff.admin?'管理者（あなた）':'一般スタッフ'}・${staff.active?(staff.linked?'利用可能':'ログイン情報の登録待ち'):'利用停止'}\n所属店舗：${stores.filter(s=>staff.store_ids.includes(s.id)).map(s=>s.name).join('・')||'未設定'}`;
-  const edit=document.createElement('button');edit.type='button';edit.className='secondary';edit.textContent='名前・所属店舗・利用状態を変更';edit.addEventListener('click',()=>editStaff(staff));
+  const detail=document.createElement('p');detail.style.whiteSpace='pre-line';detail.textContent=`${staff.admin?'管理者':(staff.can_manage_staff?'スタッフ管理権限あり':'一般スタッフ')}・${staff.active?(staff.linked?'利用可能':'ログイン情報の登録待ち'):'利用停止'}\n所属店舗：${stores.filter(s=>staff.store_ids.includes(s.id)).map(s=>s.name).join('・')||'未設定'}`;
+  const edit=document.createElement('button');edit.type='button';edit.className='secondary';edit.textContent='名前・所属店舗・利用状態を変更';edit.disabled=staff.admin&&!isOwner;edit.addEventListener('click',()=>editStaff(staff));
   card.append(name,email,detail,edit);
+  if(isOwner&&!staff.admin){
+   const permission=document.createElement('button');permission.type='button';permission.className='secondary';permission.style.marginTop='10px';
+   permission.textContent=staff.can_manage_staff?'スタッフ管理権限を外す':'スタッフ管理権限を付ける';
+   permission.disabled=!staff.can_manage_staff&&(!staff.active||!staff.linked);
+   permission.addEventListener('click',async()=>{
+    if(busy)return;
+    const allowed=!staff.can_manage_staff;
+    if(!window.confirm(staff.name+'さんのスタッフ管理権限を'+(allowed?'付与します。新規登録・情報変更・利用停止ができるようになります。':'解除します。')+'よろしいですか？'))return;
+    busy=true;permission.disabled=true;el('smBack').disabled=true;
+    try{const r=await client.rpc('set_staff_management_permission',{p_staff_id:staff.id,p_expected_revision:staff.revision,p_allowed:allowed});if(r.error)throw r.error;await load();status.textContent=allowed?'スタッフ管理権限を付与しました。':'スタッフ管理権限を解除しました。';}
+    catch(e){await load();status.textContent=message(e);}
+    finally{busy=false;el('smBack').disabled=false;}
+   });card.append(permission);
+  }
   list.appendChild(card);
  }}
  async function load(){const token=++version;records=[];stores=[];list.replaceChildren();el('smNew').disabled=true;el('smRefresh').disabled=true;status.textContent='スタッフを読み込み中です…';
   try{const r=await client.rpc('staff_management_list');if(r.error)throw r.error;if(token!==version)return;
-   records=r.data.staff;stores=r.data.stores;onboardingReady=r.data.onboarding_enabled===true;hide(el('smSetup'),true);render();el('smNew').disabled=!stores.length;status.textContent=records.length?`${records.length}名のスタッフ`:'登録されているスタッフはいません。';
+   records=r.data.staff;stores=r.data.stores;isOwner=r.data.is_owner===true;onboardingReady=r.data.onboarding_enabled===true;hide(el('smSetup'),true);render();el('smNew').disabled=!stores.length;status.textContent=records.length?`${records.length}名のスタッフ`:'登録されているスタッフはいません。';
   }catch(e){if(token===version){status.textContent=message(e);if(e.code==='42501')hide(button,true);}}
   finally{if(token===version)el('smRefresh').disabled=false;}
  }
@@ -1536,7 +1550,7 @@ ticketListSearch.addEventListener("input", () => {
  form.addEventListener('submit',event=>{event.preventDefault();if(busy||pending)return;
   const name=el('smName').value.trim(),email=el('smEmail').value.trim().toLowerCase(),storeIds=[...el('smStores').querySelectorAll('input:checked')].map(x=>x.value).sort(),active=el('smActive').value==='true';
   if(!name||name.length>100||!email||email.length>254||!storeIds.length){status.textContent='名前・メールアドレスを入力し、所属店舗を1つ以上選択してください。';return;}
-  if(!editing?.linked){const password=el('smPassword').value;if(password.length<12||password.length>128||password!==el('smPasswordAgain').value){status.textContent='12〜128文字で、同じパスワードを2回入力してください。';return;}accountPassword=password;}else accountPassword='';
+  if(!editing?.linked){const password=el('smPassword').value;if(password.length<8||password.length>128||password!==el('smPasswordAgain').value){status.textContent='8〜128文字で、同じパスワードを2回入力してください。';return;}accountPassword=password;}else accountPassword='';
   draft={args:{p_request_id:crypto.randomUUID(),p_staff_id:editing?.id||crypto.randomUUID(),p_expected_revision:editing?.revision||0,p_name:name,p_email:email,p_store_ids:storeIds,p_active:active},summary:`${editing?'スタッフ情報を変更':'スタッフを登録'}\n名前：${name}\nメールアドレス：${email}\n所属店舗：${stores.filter(s=>storeIds.includes(s.id)).map(s=>s.name).join('・')}\n利用状態：${active?'利用可能':'利用停止（過去の履歴は残ります）'}${editing?'':'\n権限：一般スタッフ'}`};
   el('smSummary').textContent=draft.summary;hide(form,true);hide(confirm,false);el('smEdit').disabled=false;el('smSave').disabled=false;el('smSave').textContent='この内容で保存';status.textContent='内容をご確認ください。';
  });
