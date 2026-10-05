@@ -1353,7 +1353,7 @@ ticketListSearch.addEventListener("input", () => {
  if(client)client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){version++;hide(view,true);pending=null;draft=null;allowed.clear();form.reset();get('mrSummary').textContent='';}});
 })();
 
-// ===== 会員一覧（読み取り専用） =====
+// ===== 会員一覧 =====
 (() => {
  const el=id=>document.getElementById(id);
  const view=document.createElement('section');view.id='memberListView';view.className='hidden';
@@ -1383,7 +1383,10 @@ ticketListSearch.addEventListener("input", () => {
    card.append(number,name,stores);
    const add=document.createElement('button');add.type='button';add.className='secondary';add.style.marginTop='10px';add.textContent='所属店舗を追加';
    add.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('member-store-open',{detail:{id:r.member.id,number:r.member.current_member_number||'',name:r.name}})));
-   card.appendChild(add);results.appendChild(card);
+   card.appendChild(add);
+   const edit=document.createElement('button');edit.type='button';edit.className='secondary';edit.style.marginTop='10px';edit.textContent='会員情報を修正';
+   edit.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('member-edit-open',{detail:{...r.member}})));
+   card.appendChild(edit);results.appendChild(card);
   }if(shown<matches.length)results.appendChild(more);}
   more.addEventListener('click',append);append();
  }
@@ -1391,7 +1394,7 @@ ticketListSearch.addEventListener("input", () => {
  async function load(){reset();const token=version;refresh.disabled=true;results.setAttribute('aria-busy','true');status.textContent='会員を読み込み中です…';
   try{if(!client||!currentStaffId)throw Error('ログインが必要です');
    const [members,links,stores]=await Promise.all([
-    pages(()=>client.from('members').select('id,current_member_number,last_name,first_name').order('id'),token),
+    pages(()=>client.from('members').select('id,current_member_number,last_name,first_name,updated_at').order('id'),token),
     pages(()=>client.from('member_stores').select('member_id,store_id').order('member_id').order('store_id'),token),
     pages(()=>client.from('stores').select('id,name').order('id'),token)
    ]);if(token!==version)return;
@@ -1583,6 +1586,79 @@ ticketListSearch.addEventListener("input", () => {
 
 restoreSession();
 </script>
+
+<script>
+// 会員情報の訂正：会員IDと関連データを維持し、読込時の値で競合を検知する。
+(()=>{
+ const el=id=>document.getElementById(id),view=document.createElement('section');
+ view.id='memberEditView';view.className='hidden';
+ view.innerHTML=`<div class="card"><h2>会員情報を修正</h2>
+ <button id="meBack" class="secondary" type="button">← 会員一覧に戻る</button>
+ <p class="small">会員番号・氏名を修正できます。回数券・残回数・利用履歴・所属店舗は引き継がれます。</p>
+ <form id="meForm"><fieldset id="meFields" style="border:0;padding:0">
+ <label for="meNumber">会員番号</label><input id="meNumber" required maxlength="100" autocomplete="off">
+ <label for="meLast">姓</label><input id="meLast" required maxlength="100" autocomplete="off">
+ <label for="meFirst">名</label><input id="meFirst" required maxlength="100" autocomplete="off">
+ <button type="submit">変更内容を確認</button></fieldset></form>
+ <div id="meConfirm" class="hidden"><h3>変更内容の確認</h3><p id="meSummary" style="white-space:pre-line"></p>
+ <button id="meEdit" type="button" class="secondary">入力に戻る</button>
+ <button id="meSave" type="button">この内容で保存</button></div>
+ <button id="meReload" class="secondary hidden" type="button">最新情報を読み直す</button>
+ <p id="meStatus" role="status" aria-live="polite"></p></div>`;
+ homeView.parentNode.appendChild(view);
+ let original=null,desired=null,busy=false,uncertain=false,generation=0;
+ const hide=(id,value)=>el(id).classList.toggle('hidden',value);
+ const status=el('meStatus'),keys=['current_member_number','last_name','first_name'];
+ const same=(a,b)=>keys.every(k=>a[k]===b[k]);
+ const label=m=>`会員番号：${m.current_member_number}\n氏名：${m.last_name} ${m.first_name}`;
+ function controls(){el('meBack').disabled=busy;el('meSave').disabled=busy;el('meEdit').disabled=busy||uncertain;el('meFields').disabled=busy;el('meReload').disabled=busy;}
+ function fill(){el('meNumber').value=original.current_member_number;el('meLast').value=original.last_name;el('meFirst').value=original.first_name;desired=null;uncertain=false;hide('meForm',false);hide('meConfirm',true);hide('meReload',true);}
+ document.addEventListener('member-edit-open',event=>{
+  if(busy||!currentStaffId)return;generation++;original={...event.detail};fill();controls();status.textContent='';
+  el('memberListView').classList.add('hidden');view.classList.remove('hidden');
+ });
+ el('meForm').addEventListener('submit',event=>{
+  event.preventDefault();if(busy||!original)return;
+  desired={current_member_number:el('meNumber').value.trim(),last_name:el('meLast').value.trim(),first_name:el('meFirst').value.trim()};
+  if(keys.some(k=>!desired[k]||desired[k].length>100)){status.textContent='会員番号・姓・名をそれぞれ1〜100文字で入力してください。';return;}
+  if(same(original,desired)){status.textContent='変更された項目がありません。';return;}
+  el('meSummary').textContent='変更前\n'+label(original)+'\n\n変更後\n'+label(desired);
+  hide('meForm',true);hide('meConfirm',false);el('meSave').textContent='この内容で保存';status.textContent='対象の会員と変更内容をご確認ください。';
+ });
+ el('meEdit').addEventListener('click',()=>{if(busy||uncertain)return;hide('meConfirm',true);hide('meForm',false);status.textContent='';});
+ const read=id=>client.from('members').select('id,current_member_number,last_name,first_name,updated_at').eq('id',id).single();
+ function conflict(){uncertain=false;hide('meConfirm',true);hide('meForm',true);hide('meReload',false);status.textContent='ほかの操作で会員情報が変更されています。上書きせずに停止しました。「最新情報を読み直す」から確認してください。';}
+ function success(){currentUsageMembers=[];selectedUsageMemberId=null;usageMemberSearch.value='';usageMemberCandidates.replaceChildren();usageMemberList.replaceChildren();usageMemberMap.clear();if(usageStore.value)void loadMembersForStore(usageStore.value);uncertain=false;hide('meConfirm',true);hide('meForm',true);hide('meReload',true);status.textContent='会員情報を修正しました。会員一覧に戻ると最新の情報が表示されます。';}
+ el('meSave').addEventListener('click',async()=>{
+  if(busy||!desired||!original)return;
+  const token=generation,before={...original},after={...desired};busy=true;controls();status.textContent='保存結果を確認中です…';
+  try{
+   if(uncertain){const check=await read(before.id);if(check.error)throw check.error;if(token!==generation)return;if(same(check.data,after)){success();return;}if(!same(check.data,before)||check.data.updated_at!==before.updated_at){conflict();return;}}
+   uncertain=true;controls();
+   const r=await client.from('members').update({...after,updated_at:new Date().toISOString()})
+    .eq('id',before.id).eq('current_member_number',before.current_member_number).eq('last_name',before.last_name).eq('first_name',before.first_name).eq('updated_at',before.updated_at).select('id');
+   if(r.error)throw r.error;if(token!==generation)return;
+   if(r.data?.length===1){success();return;}
+   const check=await read(before.id);if(check.error)throw check.error;if(token!==generation)return;
+   if(same(check.data,after)){success();return;}conflict();
+  }catch(e){
+   if(token!==generation)return;
+   if(/^(22|23|42501|PGRST116)/.test(String(e.code||''))){uncertain=false;hide('meConfirm',true);hide('meForm',false);status.textContent=e.code==='23505'?'この会員番号は別の会員が使用しています。別の番号を入力してください。':'保存できませんでした。ログイン状態と入力内容を確認してください。';}
+   else{uncertain=true;el('meSave').textContent='保存結果を確認・再試行';status.textContent='通信が途切れた可能性があります。「保存結果を確認・再試行」を押してください。';}
+  }finally{busy=false;if(token===generation)controls();}
+ });
+ el('meReload').addEventListener('click',async()=>{
+  if(busy||!original)return;const token=generation;busy=true;controls();
+  try{const r=await read(original.id);if(r.error)throw r.error;if(token!==generation)return;original=r.data;fill();status.textContent='最新情報を読み込みました。修正内容を入力し直してください。';}
+  catch(e){if(token===generation)status.textContent='最新情報を取得できませんでした。会員一覧に戻って確認してください。';}
+  finally{busy=false;if(token===generation)controls();}
+ });
+ el('meBack').addEventListener('click',()=>{if(busy)return;if(uncertain&&!window.confirm('保存された可能性があります。会員一覧で結果を確認しますか？'))return;generation++;view.classList.add('hidden');el('memberListBtn').click();});
+ function clear(){generation++;original=null;desired=null;uncertain=false;view.classList.add('hidden');el('meForm').reset();el('meSummary').textContent='';status.textContent='';}
+ el('logoutBtn').addEventListener('click',clear);client?.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT')clear();});
+})();
+</script>
+
 </body>
 </html>
 
