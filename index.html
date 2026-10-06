@@ -570,7 +570,7 @@ usageStore.addEventListener("change", () => {
     ${usable.tickets.ticket_name}<br>
     管理番号：${usable.management_number || "未登録"}<br>
     使用回数：${uses}回<br>
-    残り：${before}回 → ${after}回<br>
+    この会員の残り：${before}回 → ${after}回<br>
     有効期限：${usable.tickets.expires_at}
   `;
 }
@@ -753,7 +753,7 @@ function renderTicketList() {
     header.style.fontWeight = "800";
     header.style.fontSize = "17px";
     header.textContent =
-      `${formatTicketCategory(ticket.ticket_category)}｜${ticket.ticket_name}`;
+      `${formatTicketCategory(ticket.ticket_category)}｜${ticket.ticket_name}${allocations.length>1?"（シェア "+allocations.length+"人）":""}`;
 
     card.appendChild(header);
 
@@ -1055,7 +1055,7 @@ ticketListSearch.addEventListener("input", () => {
   });
 })();
 
-// ===== 回数券登録：1人に1枚 =====
+// ===== 回数券登録：個人・複数人シェア =====
 (() => {
   const products = [
     ['regular_5', 'パーソナル回数券（30分・5回券）', 5, 3],
@@ -1088,12 +1088,12 @@ ticketListSearch.addEventListener("input", () => {
     <div class="card">
       <h2>回数券登録</h2>
       <button id="trBack" class="secondary" type="button">← ホームに戻る</button>
-      <p class="small">1人の会員に1枚の回数券を登録します。券種を選ぶと回数と期限が自動で入ります。</p>
+      <p class="small">購入者を選び、シェアする場合は相手と割り当て回数を指定します。</p>
       <form id="trForm">
         <fieldset id="trFields" style="border:0;padding:0;margin:0;min-width:0">
           <label for="trStore">登録する店舗</label>
           <select id="trStore" required style="width:100%;padding:12px;font-size:16px"><option value="">店舗を選択</option></select>
-          <label for="trMember">会員番号・名前で検索</label>
+          <label for="trMember">購入者を会員番号・名前で検索</label>
           <input id="trMember" type="search" autocomplete="off" placeholder="会員番号または名前" disabled>
           <div id="trCandidates"></div><p id="trSelected" class="small"></p>
           <button id="trNewMember" type="button" class="secondary hidden">会員が見つからない場合は新規登録</button>
@@ -1104,6 +1104,16 @@ ticketListSearch.addEventListener("input", () => {
           <input id="trNumber" required maxlength="100" autocomplete="off" placeholder="回数券の管理番号を入力">
           <label for="trDate">購入日</label><input id="trDate" type="date" required>
           <div id="trPreview" class="info" aria-live="polite">券種を選ぶと回数・有効期限を表示します。</div>
+
+          <label for="trShare">シェアの有無</label>
+          <select id="trShare" style="width:100%;padding:12px;font-size:16px"><option value="no">シェアなし</option><option value="yes">シェアあり（会員ごとに回数を割り当てる）</option></select>
+          <div id="trSharePanel" class="hidden">
+            <p class="small">相手の回数を入力すると、残りは購入者への割り当てになります。全員に1回以上を割り当てます。利用時は、利用した会員本人の回数から消化します。</p>
+            <label for="trShareSearch">シェア相手を会員番号・名前で検索</label>
+            <input id="trShareSearch" type="search" autocomplete="off" placeholder="選択した店舗の会員を検索">
+            <div id="trShareCandidates"></div><div id="trShareRows"></div>
+            <p id="trShareBudget" class="small" aria-live="polite"></p>
+          </div>
           <button id="trReview" class="primary" type="submit">登録内容を確認</button>
         </fieldset>
       </form>
@@ -1125,6 +1135,49 @@ ticketListSearch.addEventListener("input", () => {
   const normalize = s => String(s ?? '').normalize('NFKC').toLowerCase().replace(/\s/g,'');
   const memberName = m => `${m.current_member_number ?? ''} ${m.last_name || ''} ${m.first_name || ''}`.trim();
   const storageKey = () => `kaisuken-ticket-pending-v1:${currentStaffId}`;
+
+  let shareMembers=[];
+  const shareMode=el('trShare'),shareSearch=el('trShareSearch');
+  function shareBudget(){
+    const item=products.find(p=>p[0]===product.value),total=item?.[2]||0;
+    const assigned=shareMembers.reduce((n,r)=>n+Number(r.uses||0),0),own=total-assigned;
+    el('trShareBudget').textContent=item?'購入者への割り当て：'+own+'回 / 合計：'+total+'回（1回30分）':'先に券種を選択してください。';
+    el('trShareBudget').className=own<1?'info':'small';
+    return {total,own};
+  }
+  function shareCandidates(){
+    const box=el('trShareCandidates');box.replaceChildren();
+    const term=normalize(shareSearch.value);if(!term)return;
+    const matches=members.filter(m=>m.id!==selected?.id&&!shareMembers.some(r=>r.member.id===m.id)&&normalize(memberName(m)).includes(term));
+    for(const m of matches.slice(0,20)){
+      const b=document.createElement('button');b.type='button';b.className='secondary';b.style.cssText='display:block;width:100%;text-align:left;margin-top:6px';b.textContent=memberName(m);
+      b.addEventListener('click',()=>{
+        if(!selected){status.textContent='先に購入者を選択してください。';return;}
+        const budget=shareBudget();if(budget.own<=1){status.textContent='購入者と各シェア相手に1回以上を割り当ててください。';return;}
+        shareMembers.push({member:m,uses:1});shareSearch.value='';box.replaceChildren();renderShares();status.textContent='';
+      });box.appendChild(b);
+    }
+    if(!matches.length)box.textContent='追加できる会員が見つかりません。会員一覧で登録と所属店舗をご確認ください。';
+    else if(matches.length>20)box.appendChild(document.createTextNode('候補が多いため、検索文字を追加してください。'));
+  }
+  function renderShares(){
+    const box=el('trShareRows');box.replaceChildren();
+    shareMembers.forEach((r,i)=>{
+      const row=document.createElement('div');row.className='card';
+      const label=document.createElement('label');label.htmlFor='trShareUses'+i;label.textContent=memberName(r.member)+' の割り当て回数';
+      const input=document.createElement('input');input.id='trShareUses'+i;input.type='number';input.min='1';input.max='60';input.step='1';input.required=true;input.value=r.uses;
+      input.addEventListener('input',()=>{r.uses=Number(input.value);shareBudget();});
+      const remove=document.createElement('button');remove.type='button';remove.className='secondary';remove.style.marginTop='8px';remove.textContent='この相手を外す';
+      remove.addEventListener('click',()=>{shareMembers.splice(i,1);renderShares();shareCandidates();});
+      row.append(label,input,remove);box.appendChild(row);
+    });shareBudget();
+  }
+  function clearShares(){shareMembers=[];shareSearch.value='';el('trShareCandidates').replaceChildren();renderShares();}
+  shareMode.addEventListener('change',()=>{clearShares();el('trSharePanel').classList.toggle('hidden',shareMode.value!=='yes');});
+  shareSearch.addEventListener('input',shareCandidates);
+  product.addEventListener('change',()=>{shareBudget();});
+  search.addEventListener('input',clearShares);
+
   function preview() {
     const item = products.find(p => p[0] === product.value);
     const end = item && expiry(date.value,item[3]);
@@ -1141,6 +1194,7 @@ ticketListSearch.addEventListener("input", () => {
     confirmBox.classList.add('hidden'); el('trNext').classList.add('hidden');
     el('trEdit').disabled = false; el('trBack').disabled = false;
     save.disabled = false; save.textContent = 'この内容で登録';
+    clearShares();shareMode.value='no';el('trSharePanel').classList.add('hidden');
     status.textContent = ''; preview();
   }
   async function pages(makeQuery, token) {
@@ -1174,6 +1228,7 @@ ticketListSearch.addEventListener("input", () => {
   }
   async function loadMembers() {
     const token = ++version;
+    clearShares();
     selected = null; members = []; search.value = ''; search.disabled = true;
     el('trNewMember').classList.add('hidden'); el('trNewHint').classList.add('hidden');
     el('trSelected').textContent = ''; el('trCandidates').replaceChildren();
@@ -1218,7 +1273,7 @@ ticketListSearch.addEventListener("input", () => {
     for(const member of matches.slice(0,20)) {
       const button=document.createElement('button');button.type='button';button.className='secondary';
       button.style.cssText='display:block;width:100%;text-align:left;margin-top:6px';button.textContent=memberName(member);
-      button.addEventListener('click',()=>{selected=member;search.value=memberName(member);el('trSelected').textContent=`選択中：${memberName(member)}`;el('trCandidates').replaceChildren();status.textContent='';});
+      button.addEventListener('click',()=>{selected=member;clearShares();search.value=memberName(member);el('trSelected').textContent=`選択中：${memberName(member)}`;el('trCandidates').replaceChildren();status.textContent='';});
       el('trCandidates').appendChild(button);
     }
     if(!matches.length) el('trCandidates').textContent='該当する会員はいません。';
@@ -1231,8 +1286,19 @@ ticketListSearch.addEventListener("input", () => {
     if(!store.value||!selected||!members.some(m=>m.id===selected.id)){status.textContent='店舗を選び、検索候補から会員を選択してください。';return;}
     if(!item||!end||date.value>today()){status.textContent='券種と今日以前の購入日を指定してください。';return;}
     const number=el('trNumber').value.trim();if(!number){status.textContent='管理番号を入力してください。';return;}
-    const summary=`登録先：${store.options[store.selectedIndex].text}\n会員：${memberName(selected)}\n${item[1]}\n管理番号：${number}\n購入日：${date.value}\n有効期限：${end}まで\n登録回数：${item[2]}回（1回30分）`;
+
+    let allocations=null;
+    if(shareMode.value==='yes'){
+      const budget=shareBudget();
+      if(!shareMembers.length){status.textContent='シェア相手を検索して追加してください。';return;}
+      if(shareMembers.some(r=>!Number.isInteger(r.uses)||r.uses<1||!members.some(m=>m.id===r.member.id)||r.member.id===selected.id)||!Number.isInteger(budget.own)||budget.own<1){status.textContent='購入者と全員に1回以上を割り当て、券種の回数以内にしてください。';return;}
+      allocations=[{member_id:selected.id,uses:budget.own},...shareMembers.map(r=>({member_id:r.member.id,uses:r.uses}))];
+      if(new Set(allocations.map(a=>a.member_id)).size!==allocations.length){status.textContent='同じ会員が重複しています。選び直してください。';return;}
+    }
+    let summary=`登録先：${store.options[store.selectedIndex].text}\n会員：${memberName(selected)}\n${item[1]}\n管理番号：${number}\n購入日：${date.value}\n有効期限：${end}まで\n登録回数：${item[2]}回（1回30分）`;
+    if(allocations)summary+='\nシェアあり\n'+allocations.map(a=>memberName(members.find(m=>m.id===a.member_id))+'：'+a.uses+'回').join('\n');else summary+='\nシェアなし';
     draft={args:{p_request_id:crypto.randomUUID(),p_member_id:selected.id,p_store_id:store.value,p_product_code:item[0],p_management_number:number,p_purchase_date:date.value},summary};
+    if(allocations)draft.args.p_allocations=allocations;
     el('trForm').classList.add('hidden'); el('trSummary').textContent=summary;confirmBox.classList.remove('hidden');fields.disabled=true;status.textContent='店舗・会員・管理番号をご確認ください。';
   });
   el('trEdit').addEventListener('click',()=>{if(busy||pending)return;draft=null;confirmBox.classList.add('hidden');el('trForm').classList.remove('hidden');fields.disabled=false;status.textContent='';});
@@ -1244,7 +1310,7 @@ ticketListSearch.addEventListener("input", () => {
     } catch(e){status.textContent='二重登録を防ぐための情報を保存できませんでした。登録は行っていません。';return;}
     busy=true;save.disabled=true;el('trEdit').disabled=true;el('trBack').disabled=true;status.textContent='登録中です…';
     try {
-      const result=await client.rpc('register_single_ticket',pending.args);
+      const result=await client.rpc(pending.args.p_allocations?'register_shared_ticket':'register_single_ticket',pending.args);
       if(result.error)throw result.error;
       if(!result.data?.success)throw new Error('保存結果を確認できませんでした。');
       sessionStorage.removeItem(key);
@@ -1283,7 +1349,7 @@ ticketListSearch.addEventListener("input", () => {
     if(returnVersion!==version||view.classList.contains('hidden'))return;
     const member=members.find(m=>m.id===result.memberId);
     if(!member){status.textContent='会員登録は完了しました。会員情報を再読み込みして検索してください。';el('trRetryLoad').classList.remove('hidden');return;}
-    selected=member;search.value=memberName(member);el('trSelected').textContent='選択中：'+memberName(member);
+    selected=member;clearShares();search.value=memberName(member);el('trSelected').textContent='選択中：'+memberName(member);
     status.textContent='登録した会員を選択しました。続けて回数券の内容を入力してください。';
   });
   if(client)client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){version++;pending=null;draft=null;members=[];selected=null;view.classList.add('hidden');}});
