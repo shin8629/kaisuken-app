@@ -370,13 +370,16 @@ const ticketListView = document.getElementById("ticketListView");
 const ticketListBackBtn = document.getElementById("ticketListBackBtn");
 
 ticketListBtn.addEventListener("click", () => {
+  setTicketMemberContext(null);
   homeView.classList.add("hidden");
   ticketListView.classList.remove("hidden");
 });
 
 ticketListBackBtn.addEventListener("click", () => {
+  ticketListRequest++;
   ticketListView.classList.add("hidden");
-  homeView.classList.remove("hidden");
+  if(ticketMemberContext){ document.getElementById("memberListView").classList.remove("hidden"); }
+  else homeView.classList.remove("hidden");
 });
  const usageStore = document.getElementById("usageStore");
 
@@ -841,6 +844,7 @@ function renderTicketList() {
 
   const tickets = ticketListData.tickets
     .filter(ticket => {
+      if (ticketMemberContext && !ticketListData.allocations.some(a => a.ticket_id === ticket.id && a.member_id === ticketMemberContext.id)) return false;
       if (storeId && ticket.purchase_store_id !== storeId) {
         return false;
       }
@@ -922,7 +926,7 @@ function renderTicketList() {
     summary.textContent =
       `店舗：${getStoreName(ticket.purchase_store_id)}\n` +
       `購入者：${purchaser.number} ${purchaser.name}\n` +
-      `残り：${totalRemaining}回 / ${ticket.total_uses}回\n` +
+      `${ticketMemberContext ? "券全体の残り" : "残り"}：${totalRemaining}回 / ${ticket.total_uses}回\n` +
       `購入日：${ticket.purchase_date}\n` +
       `有効期限：${ticket.expires_at}`;
 
@@ -935,7 +939,7 @@ function renderTicketList() {
       allocationBox.style.paddingTop = "10px";
       allocationBox.style.borderTop = "1px solid #e1e6eb";
 
-      allocations.forEach(allocation => {
+      allocations.filter(a => !ticketMemberContext || a.member_id === ticketMemberContext.id).forEach(allocation => {
         const member = getMemberName(allocation.member_id);
 
         const row = document.createElement("div");
@@ -959,68 +963,76 @@ function renderTicketList() {
   });
 }
 
-async function loadTicketList() {
-  canCorrectTicketBalance = false;
-  ticketListContainer.textContent = "回数券を読み込み中です…";
-
-  const [
-    ticketsResult,
-    allocationsResult,
-    membersResult,
-    storesResult,
-    balanceRoleResult
-  ] = await Promise.all([
-    client
-      .from("tickets")
-      .select("*"),
-
-    client
-      .from("ticket_allocations")
-      .select("*"),
-
-    client
-      .from("members")
-      .select("id,current_member_number,last_name,first_name"),
-
-    client
-      .from("stores")
-      .select("id,name"),
-    client.rpc("is_staff")
-  ]);
-
-  const error =
-    ticketsResult.error ||
-    allocationsResult.error ||
-    membersResult.error ||
-    storesResult.error;
-
-  if (error) {
-    console.error("回数券一覧取得エラー:", error);
-    ticketListContainer.textContent =
-      "回数券一覧の取得に失敗しました。";
-    return;
-  }
-
-  canCorrectTicketBalance = !balanceRoleResult.error && balanceRoleResult.data === true;
-  ticketListData = {
-    tickets: ticketsResult.data || [],
-    allocations: allocationsResult.data || [],
-    members: membersResult.data || [],
-    stores: storesResult.data || []
-  };
-
-  ticketListStore.innerHTML =
-    '<option value="">すべての店舗</option>';
-
-  ticketListData.stores.forEach(store => {
-    const option = document.createElement("option");
-    option.value = store.id;
-    option.textContent = store.name;
-    ticketListStore.appendChild(option);
-  });
-
-  renderTicketList();
+let ticketMemberContext = null;
+let ticketListRequest = 0;
+const ticketMemberHeading = document.createElement('p');
+ticketMemberHeading.style.whiteSpace = 'pre-line';
+ticketMemberHeading.setAttribute('role','status');
+ticketListContainer.before(ticketMemberHeading);
+function setTicketMemberContext(member) {
+  ticketMemberContext = member;
+  ticketListRequest++;
+  ticketListData = {tickets:[],allocations:[],members:[],stores:[]};
+  ticketListContainer.replaceChildren();
+  ticketListSearch.value = ''; ticketListStore.value = '';
+  ticketListView.querySelector('h2').textContent = member ? 'この会員の回数券' : '回数券一覧';
+  ticketMemberHeading.textContent = member ? `会員番号：${member.current_member_number}\n${member.last_name} ${member.first_name}\nシェアで受け取った回数券も表示しています。` : '';
+  ticketListBackBtn.textContent = member ? '← 会員一覧に戻る' : '← ホームに戻る';
 }
+document.addEventListener('member-tickets-open',event=>{
+  setTicketMemberContext({...event.detail});
+  document.getElementById('memberListView').classList.add('hidden');
+  homeView.classList.add('hidden');ticketListView.classList.remove('hidden');
+  void loadTicketList();
+});
+async function loadTicketList() {
+  const request = ++ticketListRequest, selectedMember = ticketMemberContext?.id, selectedStore = ticketListStore.value;
+  canCorrectTicketBalance = false;
+  ticketListContainer.textContent = '回数券を読み込み中です…';
+  async function pages(make) {
+    const rows=[];
+    for(let offset=0;;){
+      if(request!==ticketListRequest)return [];
+      const r=await make().range(offset,offset+499);if(r.error)throw r.error;
+      if(!r.data?.length)return rows;rows.push(...r.data);offset+=r.data.length;
+    }
+  }
+  async function byIds(table,column,ids,columns='*') {
+    const rows=[],unique=[...new Set(ids.filter(Boolean))];
+    for(let i=0;i<unique.length;i+=100)rows.push(...await pages(()=>client.from(table).select(columns).in(column,unique.slice(i,i+100)).order('id')));
+    return rows;
+  }
+  try {
+    let tickets,allocations,members;
+    if(selectedMember){
+      const own=await pages(()=>client.from('ticket_allocations').select('*').eq('member_id',selectedMember).order('id'));
+      const ids=own.map(a=>a.ticket_id);
+      [tickets,allocations]=await Promise.all([byIds('tickets','id',ids),byIds('ticket_allocations','ticket_id',ids)]);
+      members=await byIds('members','id',[selectedMember,...allocations.map(a=>a.member_id),...tickets.map(t=>t.purchaser_member_id)],'id,current_member_number,last_name,first_name');
+    }else{
+      [tickets,allocations,members]=await Promise.all([
+        pages(()=>client.from('tickets').select('*').order('id')),
+        pages(()=>client.from('ticket_allocations').select('*').order('id')),
+        pages(()=>client.from('members').select('id,current_member_number,last_name,first_name').order('id'))
+      ]);
+    }
+    const [stores,role]=await Promise.all([pages(()=>client.from('stores').select('id,name').order('id')),client.rpc('is_staff')]);
+    if(request!==ticketListRequest)return;
+    canCorrectTicketBalance=!role.error&&role.data===true;
+    ticketListData={tickets,allocations,members,stores};
+    ticketListStore.replaceChildren(new Option('すべての店舗',''));
+    for(const store of stores)ticketListStore.appendChild(new Option(store.name,store.id));
+    if(stores.some(s=>s.id===selectedStore))ticketListStore.value=selectedStore;
+    renderTicketList();
+  }catch(error){
+    if(request!==ticketListRequest)return;
+    ticketListData={tickets:[],allocations:[],members:[],stores:[]};
+    ticketListContainer.textContent='回数券を取得できませんでした。';
+    const retry=document.createElement('button');retry.type='button';retry.className='secondary';retry.textContent='もう一度読み込む';retry.addEventListener('click',loadTicketList);ticketListContainer.appendChild(retry);
+  }
+}
+document.getElementById('logoutBtn').addEventListener('click',()=>setTicketMemberContext(null));
+client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT')setTicketMemberContext(null);});
 
 ticketListBtn.addEventListener("click", () => {
   loadTicketList();
@@ -1615,7 +1627,10 @@ ticketListSearch.addEventListener("input", () => {
    card.appendChild(add);
    const edit=document.createElement('button');edit.type='button';edit.className='secondary';edit.style.marginTop='10px';edit.textContent='会員情報を修正';
    edit.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('member-edit-open',{detail:{...r.member}})));
-   card.appendChild(edit);results.appendChild(card);
+   card.appendChild(edit);
+   const tickets=document.createElement('button');tickets.type='button';tickets.className='secondary';tickets.style.marginTop='10px';tickets.textContent='この会員の回数券';
+   tickets.addEventListener('click',()=>document.dispatchEvent(new CustomEvent('member-tickets-open',{detail:{...r.member}})));
+   card.appendChild(tickets);results.appendChild(card);
   }if(shown<matches.length)results.appendChild(more);}
   more.addEventListener('click',append);append();
  }
@@ -1890,6 +1905,7 @@ restoreSession();
 
 </body>
 </html>
+
 
 
 
