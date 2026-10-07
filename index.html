@@ -675,7 +675,68 @@ function formatTicketCategory(category) {
   return category || "";
 }
 
-// 残回数訂正：サーバーでも管理権限・競合・上限を検証する。
+// 残回数訂正・途中からシェア：サーバーでも有効スタッフ・競合・上限を検証する。
+async function openTicketShareTransfer(allocation,ticket) {
+ const dialog=document.createElement('dialog');
+ dialog.style.cssText='max-width:540px;width:calc(100% - 48px);max-height:85vh;overflow:auto;border:1px solid #c8d2dc;border-radius:14px;padding:20px';
+ dialog.innerHTML=`<h2>途中からシェア</h2><p data-source style="white-space:pre-line"></p>
+ <p class="small">本人の未使用分を相手へ移します。券全体の残回数・使用済みの履歴・有効期限は変わりません。</p>
+ <form><fieldset style="border:0;padding:0"><label>シェア相手を検索<input name="search" placeholder="会員番号・名前" autocomplete="off"></label>
+ <p data-search-status role="status">会員を読み込み中…</p><div data-results></div><p data-target></p>
+ <label>相手に移す回数<input name="uses" type="number" min="1" step="1" required></label></fieldset>
+ <p data-confirm style="white-space:pre-line"></p><p data-status role="status"></p>
+ <button type="submit">シェア内容を確認</button><button type="button" data-edit hidden>入力に戻る</button>
+ <button type="button" data-close class="secondary">閉じる</button></form>`;
+ const member=getMemberName(allocation.member_id);
+ dialog.querySelector('[data-source]').textContent=`移す元：${member.number} ${member.name}\n${ticket.ticket_name}\n管理番号：${allocation.management_number||'未登録'}\n本人の残り：${allocation.remaining_uses}回\n有効期限：${ticket.expires_at}`;
+ const form=dialog.querySelector('form'),fields=form.querySelector('fieldset'),search=form.elements.search,uses=form.elements.uses;
+ const results=dialog.querySelector('[data-results]'),searchStatus=dialog.querySelector('[data-search-status]'),targetLabel=dialog.querySelector('[data-target]');
+ const status=dialog.querySelector('[data-status]'),confirm=dialog.querySelector('[data-confirm]'),submit=form.querySelector('[type=submit]'),edit=form.querySelector('[data-edit]'),close=form.querySelector('[data-close]');
+ uses.max=allocation.remaining_uses;
+ let members=[],target=null,payload=null,busy=false,uncertain=false,saved=false;
+ const normalize=v=>String(v??'').normalize('NFKC').toLowerCase().replace(/\s/g,'');
+ function render(){
+  results.replaceChildren();const key=normalize(search.value);if(!key){searchStatus.textContent='購入店舗に所属する相手の会員番号・名前を入力してください。';return;}
+  const matches=members.filter(m=>normalize(m.current_member_number+' '+m.last_name+' '+m.first_name).includes(key));
+  searchStatus.textContent=matches.length>20?'候補が多いため20件を表示しています。さらに絞り込んでください。':`${matches.length}件`;
+  for(const m of matches.slice(0,20)){const b=document.createElement('button');b.type='button';b.className='secondary';b.style.cssText='display:block;margin:6px 0;width:100%;text-align:left';b.textContent=`${m.current_member_number} ${m.last_name} ${m.first_name}`;b.addEventListener('click',()=>{target=m;targetLabel.textContent='選択した相手：'+b.textContent;});results.appendChild(b);}
+ }
+ search.addEventListener('input',()=>{target=null;targetLabel.textContent='';render();});
+ close.addEventListener('click',()=>{if(!busy&&!uncertain){dialog.close();dialog.remove();}});
+ dialog.addEventListener('cancel',e=>{if(busy||uncertain)e.preventDefault();});dialog.addEventListener('close',()=>dialog.remove());
+ edit.addEventListener('click',()=>{if(busy||uncertain)return;payload=null;fields.disabled=false;confirm.textContent='';edit.hidden=true;submit.textContent='シェア内容を確認';});
+ form.addEventListener('submit',async e=>{
+  e.preventDefault();if(busy||saved)return;
+  if(!payload){
+   const n=Number(uses.value);if(!target||!Number.isInteger(n)||n<1||n>allocation.remaining_uses){status.textContent='相手を選択し、本人の残回数以内で1回以上を入力してください。';return;}
+   payload={p_request_id:crypto.randomUUID(),p_source_allocation_id:allocation.id,p_target_member_id:target.id,p_uses:n,p_expected_remaining:allocation.remaining_uses,p_expected_revision:allocation.balance_revision};
+   fields.disabled=true;edit.hidden=false;status.textContent='';confirm.textContent=`本人：${member.number} ${member.name}\n残り ${allocation.remaining_uses}回 → ${allocation.remaining_uses-n}回\n相手：${target.current_member_number} ${target.last_name} ${target.first_name}\n相手へ ${n}回を移します。すでに同じ券をシェアしている場合は追加されます。`;
+   submit.textContent='この内容で回数を移す';return;
+  }
+  busy=true;submit.disabled=edit.disabled=close.disabled=true;status.textContent='保存中…';
+  try{
+   const r=await client.rpc('transfer_ticket_uses',payload);if(r.error)throw r.error;if(!r.data?.success)throw new Error('保存結果不明');
+   saved=true;uncertain=false;submit.hidden=edit.hidden=true;status.textContent='シェアを保存しました。最新の残回数は一覧で確認してください。';close.textContent='一覧に戻る';await loadTicketList();
+  }catch(error){
+   const definite=['40001','42501','P0001','22003','22P02','23503'].includes(error.code);uncertain=!definite;edit.hidden=true;submit.hidden=definite;
+   status.textContent=definite?(error.message||'保存できませんでした。')+' 閉じて一覧を確認してください。':'通信結果を確認できません。「保存結果を確認・再試行」を押してください。二重には移しません。';submit.textContent='保存結果を確認・再試行';if(definite)await loadTicketList();
+  }finally{busy=false;submit.disabled=edit.disabled=false;close.disabled=uncertain;}
+ });
+ document.body.appendChild(dialog);dialog.showModal();
+ try{
+  for(let offset=0;;){const r=await client.from('member_stores').select('member_id,members(id,current_member_number,last_name,first_name)').eq('store_id',ticket.purchase_store_id).order('member_id').range(offset,offset+499);if(r.error)throw r.error;if(!r.data?.length)break;members.push(...r.data.map(x=>x.members).filter(m=>m&&m.id!==allocation.member_id));offset+=r.data.length;}
+  render();
+ }catch{searchStatus.textContent='会員を取得できませんでした。閉じて開き直してください。';}
+}
+async function loadTicketTransferHistory(area,ticket,allocation){
+ try{
+  const r=await client.from('ticket_share_transfers').select('*').eq('ticket_id',ticket.id).order('created_at',{ascending:false}).limit(50);if(r.error)throw r.error;
+  area.replaceChildren();if(!r.data?.length){area.textContent='途中からシェアした履歴はありません。';return;}
+  for(const x of r.data){const p=document.createElement('p');p.style.whiteSpace='pre-line';p.textContent=`${new Date(x.created_at).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}（日本時間）\n${x.source_member_label} → ${x.target_member_label}：${x.uses}回\n移す元：${x.source_before}回 → ${x.source_after}回／相手：${x.target_before}回 → ${x.target_after}回\n担当：${x.performed_by_name}`;area.appendChild(p);}
+  if(r.data.length===50)area.append('最新50件を表示しています。');
+ }catch{area.textContent='シェア履歴を取得できませんでした。';}
+}
+
 let canCorrectTicketBalance = false;
 function addBalanceCorrectionButton(row, allocation, ticket) {
   if (!canCorrectTicketBalance) return;
@@ -691,13 +752,16 @@ async function openBalanceCorrection(allocation, ticket) {
   const dialog = document.createElement('dialog');
   dialog.style.cssText = 'max-width:540px;width:calc(100% - 48px);max-height:85vh;overflow:auto;border:1px solid #c8d2dc;border-radius:14px;padding:20px';
   dialog.innerHTML = `<h2>残回数の訂正</h2><p data-summary style="white-space:pre-line"></p>
-    <form><label>訂正後の残回数<input name="remaining" type="number" min="0" step="1" required></label>
+    <button type="button" data-share class="secondary">途中からシェアする</button><p class="small">相手へ回数を渡す場合は、上のボタンから操作してください。</p><form><label>訂正後の残回数<input name="remaining" type="number" min="0" step="1" required></label>
     <label>訂正理由<textarea name="reason" maxlength="500" required rows="3" placeholder="例：登録時の入力誤り"></textarea></label>
     <p class="small">割当回数の範囲内で訂正できます。シェア相手の残回数は変わりません。</p>
     <p data-confirm style="white-space:pre-line"></p><p role="status"></p>
     <button type="submit">訂正内容を確認</button><button type="button" data-edit hidden>入力に戻る</button>
     <button type="button" class="secondary" data-close>閉じる</button></form>
-    <h3>この会員の残回数訂正履歴</h3><div data-audit>読み込み中…</div>`;
+    <h3>この会員の残回数訂正履歴</h3><div data-audit>読み込み中…</div><h3>この券のシェア履歴</h3><div data-transfer-audit>読み込み中…</div>`;
+  const share = dialog.querySelector('[data-share]');
+  share.disabled = Number(allocation.remaining_uses) < 1;
+  share.addEventListener('click', () => { dialog.close(); dialog.remove(); openTicketShareTransfer(allocation,ticket); });
   const member = getMemberName(allocation.member_id);
   dialog.querySelector('[data-summary]').textContent = `${member.number} ${member.name}\n${ticket.ticket_name}\n管理番号：${allocation.management_number || '未登録'}\n訂正前の残回数：${allocation.remaining_uses}回 / 割当：${allocation.allocated_uses}回`;
   const form = dialog.querySelector('form'), remaining = form.elements.remaining, reason = form.elements.reason;
@@ -728,7 +792,7 @@ async function openBalanceCorrection(allocation, ticket) {
       confirmation.textContent = `残回数：${allocation.remaining_uses}回 → ${value}回\n理由：${why}\nこの内容を記録して訂正します。`;
       status.textContent = ''; edit.hidden = false; submit.textContent = 'この内容で訂正する'; return;
     }
-    busy = true; submit.disabled = close.disabled = edit.disabled = true;
+    busy = true; share.disabled = true; submit.disabled = close.disabled = edit.disabled = true;
     status.textContent = '保存中…';
     try {
       const result = await client.rpc('correct_ticket_balance', payload);
@@ -763,7 +827,7 @@ async function openBalanceCorrection(allocation, ticket) {
       if (data.length===50) area.append('最新50件を表示しています。');
     } catch { area.textContent = '訂正履歴を取得できませんでした。'; }
   }
-  document.body.appendChild(dialog); dialog.showModal(); await loadAudit();
+  document.body.appendChild(dialog); dialog.showModal(); await Promise.all([loadAudit(),loadTicketTransferHistory(dialog.querySelector("[data-transfer-audit]"),ticket,allocation)]);
 }
 
 function renderTicketList() {
@@ -918,7 +982,7 @@ async function loadTicketList() {
     client
       .from("stores")
       .select("id,name"),
-    client.rpc("is_staff_manager")
+    client.rpc("is_staff")
   ]);
 
   const error =
@@ -1823,6 +1887,7 @@ restoreSession();
 
 </body>
 </html>
+
 
 
 
