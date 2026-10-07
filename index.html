@@ -675,6 +675,97 @@ function formatTicketCategory(category) {
   return category || "";
 }
 
+// 残回数訂正：サーバーでも管理権限・競合・上限を検証する。
+let canCorrectTicketBalance = false;
+function addBalanceCorrectionButton(row, allocation, ticket) {
+  if (!canCorrectTicketBalance) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'secondary';
+  button.textContent = '残回数を訂正';
+  button.style.display = 'block';
+  button.addEventListener('click', () => openBalanceCorrection(allocation, ticket));
+  row.appendChild(button);
+}
+async function openBalanceCorrection(allocation, ticket) {
+  const dialog = document.createElement('dialog');
+  dialog.style.cssText = 'max-width:540px;width:calc(100% - 48px);max-height:85vh;overflow:auto;border:1px solid #c8d2dc;border-radius:14px;padding:20px';
+  dialog.innerHTML = `<h2>残回数の訂正</h2><p data-summary style="white-space:pre-line"></p>
+    <form><label>訂正後の残回数<input name="remaining" type="number" min="0" step="1" required></label>
+    <label>訂正理由<textarea name="reason" maxlength="500" required rows="3" placeholder="例：登録時の入力誤り"></textarea></label>
+    <p class="small">割当回数の範囲内で訂正できます。シェア相手の残回数は変わりません。</p>
+    <p data-confirm style="white-space:pre-line"></p><p role="status"></p>
+    <button type="submit">訂正内容を確認</button><button type="button" data-edit hidden>入力に戻る</button>
+    <button type="button" class="secondary" data-close>閉じる</button></form>
+    <h3>この会員の残回数訂正履歴</h3><div data-audit>読み込み中…</div>`;
+  const member = getMemberName(allocation.member_id);
+  dialog.querySelector('[data-summary]').textContent = `${member.number} ${member.name}\n${ticket.ticket_name}\n管理番号：${allocation.management_number || '未登録'}\n訂正前の残回数：${allocation.remaining_uses}回 / 割当：${allocation.allocated_uses}回`;
+  const form = dialog.querySelector('form'), remaining = form.elements.remaining, reason = form.elements.reason;
+  const submit = form.querySelector('[type=submit]'), edit = form.querySelector('[data-edit]'), close = form.querySelector('[data-close]');
+  const status = form.querySelector('[role=status]'), confirmation = form.querySelector('[data-confirm]');
+  remaining.max = allocation.allocated_uses;
+  remaining.value = allocation.remaining_uses;
+  let payload = null, busy = false, uncertain = false, saved = false;
+  const dispose = () => { if (!busy) { dialog.close(); dialog.remove(); } };
+  close.addEventListener('click', dispose);
+  dialog.addEventListener('cancel', event => { if (busy || uncertain) event.preventDefault(); });
+  dialog.addEventListener('close', () => dialog.remove());
+  edit.addEventListener('click', () => {
+    if (busy || uncertain) return;
+    payload = null; remaining.disabled = reason.disabled = false;
+    confirmation.textContent = ''; status.textContent = ''; edit.hidden = true;
+    submit.textContent = '訂正内容を確認';
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); if (busy || saved) return;
+    if (!payload) {
+      const value = Number(remaining.value), why = reason.value.trim();
+      if (!Number.isInteger(value) || value < 0 || value > allocation.allocated_uses || value === allocation.remaining_uses || !why || why.length > 500) {
+        status.textContent = '現在と異なる残回数（0〜割当回数）と、訂正理由を入力してください。'; return;
+      }
+      payload = {p_request_id:crypto.randomUUID(),p_allocation_id:allocation.id,p_remaining:value,p_reason:why,p_expected_remaining:allocation.remaining_uses,p_expected_revision:allocation.balance_revision};
+      remaining.disabled = reason.disabled = true;
+      confirmation.textContent = `残回数：${allocation.remaining_uses}回 → ${value}回\n理由：${why}\nこの内容を記録して訂正します。`;
+      status.textContent = ''; edit.hidden = false; submit.textContent = 'この内容で訂正する'; return;
+    }
+    busy = true; submit.disabled = close.disabled = edit.disabled = true;
+    status.textContent = '保存中…';
+    try {
+      const result = await client.rpc('correct_ticket_balance', payload);
+      if (result.error) throw result.error;
+      if (!result.data?.success) throw new Error('保存結果を確認できませんでした。');
+      saved = true; uncertain = false;
+      status.textContent = '訂正を保存しました。最新の残回数は一覧で確認してください。';
+      submit.hidden = edit.hidden = true; close.textContent = '一覧に戻る';
+      await loadTicketList(); await loadAudit();
+    } catch (error) {
+      const definite = ['40001','42501','P0001','22003','22P02'].includes(error.code);
+      uncertain = !definite;
+      status.textContent = definite ? (error.message || '訂正できませんでした。') + ' 閉じて一覧を更新し、確認してください。' : '通信結果を確認できません。同じ内容で「保存結果を確認・再試行」を押してください。二重訂正は行いません。';
+      submit.textContent = '保存結果を確認・再試行'; submit.hidden = definite; edit.hidden = true;
+      if (definite) await loadTicketList();
+    } finally {
+      busy = false; submit.disabled = false; edit.disabled = false; close.disabled = uncertain;
+    }
+  });
+  async function loadAudit() {
+    const area = dialog.querySelector('[data-audit]');
+    try {
+      const {data,error} = await client.from('ticket_balance_corrections').select('old_remaining,new_remaining,reason,corrected_by_name,created_at').eq('allocation_id',allocation.id).order('created_at',{ascending:false}).limit(50);
+      if (error) throw error;
+      area.replaceChildren();
+      if (!data?.length) { area.textContent = '訂正履歴はありません。'; return; }
+      for (const item of data) {
+        const p = document.createElement('p'); p.style.whiteSpace = 'pre-line';
+        p.textContent = `${new Date(item.created_at).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}（日本時間）\n${item.old_remaining}回 → ${item.new_remaining}回｜${item.corrected_by_name}\n理由：${item.reason}`;
+        area.appendChild(p);
+      }
+      if (data.length===50) area.append('最新50件を表示しています。');
+    } catch { area.textContent = '訂正履歴を取得できませんでした。'; }
+  }
+  document.body.appendChild(dialog); dialog.showModal(); await loadAudit();
+}
+
 function renderTicketList() {
   const storeId = ticketListStore.value;
   const keyword = ticketListSearch.value.trim().toLowerCase();
@@ -790,6 +881,7 @@ function renderTicketList() {
           `残り：${allocation.remaining_uses}回 / ${allocation.allocated_uses}回`;
 
         row.style.whiteSpace = "pre-line";
+        addBalanceCorrectionButton(row, allocation, ticket);
         allocationBox.appendChild(row);
       });
 
@@ -801,13 +893,15 @@ function renderTicketList() {
 }
 
 async function loadTicketList() {
+  canCorrectTicketBalance = false;
   ticketListContainer.textContent = "回数券を読み込み中です…";
 
   const [
     ticketsResult,
     allocationsResult,
     membersResult,
-    storesResult
+    storesResult,
+    balanceRoleResult
   ] = await Promise.all([
     client
       .from("tickets")
@@ -823,7 +917,8 @@ async function loadTicketList() {
 
     client
       .from("stores")
-      .select("id,name")
+      .select("id,name"),
+    client.rpc("is_staff_manager")
   ]);
 
   const error =
@@ -839,6 +934,7 @@ async function loadTicketList() {
     return;
   }
 
+  canCorrectTicketBalance = !balanceRoleResult.error && balanceRoleResult.data === true;
   ticketListData = {
     tickets: ticketsResult.data || [],
     allocations: allocationsResult.data || [],
@@ -1727,6 +1823,7 @@ restoreSession();
 
 </body>
 </html>
+
 
 
 
