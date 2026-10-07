@@ -38,6 +38,7 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<meta name="robots" content="noindex, nofollow, noarchive">
 </head>
 <body>
 <div class="wrap">
@@ -225,10 +226,12 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
  window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installPrompt=event;button.hidden=false;});
  button.addEventListener('click',async()=>{if(!installPrompt)return;const prompt=installPrompt;installPrompt=null;button.disabled=true;try{await prompt.prompt();const choice=await prompt.userChoice;status.textContent=choice.outcome==='accepted'?'追加操作を受け付けました。ホーム画面をご確認ください。':'後からブラウザーのメニューでも追加できます。';}catch(e){status.textContent='ブラウザーのメニューからホーム画面に追加してください。';}finally{button.hidden=true;button.disabled=false;}});
  window.addEventListener('appinstalled',()=>{installPrompt=null;button.hidden=true;help.hidden=true;});
- function network(){const offline=!navigator.onLine;document.getElementById('pwaOffline').hidden=!offline;content.inert=offline;content.style.opacity=offline?'.45':'';}
+ const insecure=!window.isSecureContext;
+ if(insecure){const notice=document.createElement('p');notice.setAttribute('role','alert');notice.textContent='安全なHTTPSのURLから開いてください。この接続ではログイン・登録を停止しています。';bar.prepend(notice);}
+ function network(){const offline=!navigator.onLine||insecure;document.getElementById('pwaOffline').hidden=!offline;content.inert=offline;content.style.opacity=offline?'.45':'';}
  window.addEventListener('offline',network);window.addEventListener('online',network);network();
- for(const name of ['click','submit'])content.addEventListener(name,event=>{if(!navigator.onLine){event.preventDefault();event.stopImmediatePropagation();network();}},true);
- if('serviceWorker' in navigator)window.addEventListener('load',()=>{navigator.serviceWorker.register('./sw.js',{scope:'./',updateViaCache:'none'}).catch(()=>{status.textContent='起動設定を取得できませんでした。通信状態を確認して再度開いてください。';});});
+ for(const name of ['click','submit'])content.addEventListener(name,event=>{if(!navigator.onLine||insecure){event.preventDefault();event.stopImmediatePropagation();network();}},true);
+ if(window.isSecureContext&&'serviceWorker' in navigator)window.addEventListener('load',()=>{navigator.serviceWorker.register('./sw.js',{scope:'./',updateViaCache:'none'}).catch(()=>{status.textContent='起動設定を取得できませんでした。通信状態を確認して再度開いてください。';});});
 })();
 
 </script>
