@@ -79,7 +79,6 @@ button{border:0;border-radius:10px;padding:12px 14px;font-weight:800;font-size:1
 
       <div class="homegrid">
         <button id="usageBtn" class="homebtn"><strong>利用登録</strong><span>利用内容を記録する</span></button> 
-        <button id="ticketListBtn" class="homebtn"><strong>回数券一覧</strong><span>残り回数・有効期限を確認</span></button>
         <button id="historyBtn" class="homebtn"><strong>利用履歴</strong><span>過去の利用内容を確認</span></button>
         <button id="memberListBtn" class="homebtn"><strong>会員一覧</strong><span>会員情報・所属店舗を確認</span></button>
         <button id="memberRegisterBtn" class="homebtn"><strong>会員登録</strong><span>新しい会員を登録する</span></button>
@@ -365,15 +364,11 @@ usageBackBtn.addEventListener("click", () => {
   usageView.classList.add("hidden");
   homeView.classList.remove("hidden");
 });
-const ticketListBtn = document.getElementById("ticketListBtn");
+
 const ticketListView = document.getElementById("ticketListView");
 const ticketListBackBtn = document.getElementById("ticketListBackBtn");
 
-ticketListBtn.addEventListener("click", () => {
-  setTicketMemberContext(null);
-  homeView.classList.add("hidden");
-  ticketListView.classList.remove("hidden");
-});
+
 
 ticketListBackBtn.addEventListener("click", () => {
   ticketListRequest++;
@@ -1034,9 +1029,7 @@ async function loadTicketList() {
 document.getElementById('logoutBtn').addEventListener('click',()=>setTicketMemberContext(null));
 client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT')setTicketMemberContext(null);});
 
-ticketListBtn.addEventListener("click", () => {
-  loadTicketList();
-});
+
 
 ticketListStore.addEventListener("change", () => {
   renderTicketList();
@@ -1491,7 +1484,7 @@ ticketListSearch.addEventListener("input", () => {
       sessionStorage.removeItem(key);
       if(token!==version)return;
       pending=null;draft=null;confirmBox.classList.add('hidden');
-      status.textContent='回数券を登録しました。回数券一覧から確認できます。';
+      status.textContent='回数券を登録しました。会員一覧の「この会員の回数券」から確認できます。';
       el('trNext').classList.remove('hidden');
     } catch(e) {
       if(token!==version)return;
@@ -1905,6 +1898,7 @@ restoreSession();
 
 </body>
 </html>
+
 
 
 
